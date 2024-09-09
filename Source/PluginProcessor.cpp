@@ -222,10 +222,24 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
 
     const float minDelayTimeInSamples = 0.025f * getSampleRate(); // 25ms in samples
 
+    // DC blocking filter coefficients
+    const float R = 0.995f;
+    static float lastInputLeft = 0.0f, lastInputRight = 0.0f, lastOutputLeft = 0.0f, lastOutputRight = 0.0f;
+
     for (int sample = 0; sample < buffer.getNumSamples(); sample++)
     {
-        mCircularBufferLeft[mCircularBufferWriteHead] = leftChannel[sample] + mFeedbackLeft;
-        mCircularBufferRight[mCircularBufferWriteHead] = rightChannel[sample] + mFeedbackRight;
+        // Apply DC blocking filter
+        float inputLeft = leftChannel[sample];
+        float inputRight = rightChannel[sample];
+        float outputLeft = inputLeft - lastInputLeft + R * lastOutputLeft;
+        float outputRight = inputRight - lastInputRight + R * lastOutputRight;
+        lastInputLeft = inputLeft;
+        lastInputRight = inputRight;
+        lastOutputLeft = outputLeft;
+        lastOutputRight = outputRight;
+
+        mCircularBufferLeft[mCircularBufferWriteHead] = outputLeft + mFeedbackLeft;
+        mCircularBufferRight[mCircularBufferWriteHead] = outputRight + mFeedbackRight;
         
         // Smooth the stereo offset
         mStereoOffsetSmooth = mStereoOffsetSmooth * smoothCoeff + stereoOffset * (1.0f - smoothCoeff);
@@ -269,15 +283,23 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
             float mDelayReadHead_left = mCircularBufferWriteHead - mDelayTimeInSamples_left[i];
             float mDelayReadHead_right = mCircularBufferWriteHead - mDelayTimeInSamples_right[i] - mStereoOffsetSmooth;
 
+            // Pitch shift for even-numbered delay lines (octave up)
+            if (i % 2 == 0) {
+                mDelayReadHead_left *= 2.0f;
+                mDelayReadHead_right *= 2.0f;
+            }
+
             // Ensure read heads are within buffer bounds
+            mDelayReadHead_left = std::fmod(mDelayReadHead_left, static_cast<float>(mCircularBufferLength));
+            mDelayReadHead_right = std::fmod(mDelayReadHead_right, static_cast<float>(mCircularBufferLength));
             if (mDelayReadHead_left < 0) mDelayReadHead_left += mCircularBufferLength;
             if (mDelayReadHead_right < 0) mDelayReadHead_right += mCircularBufferLength;
 
-            int readHead_x_left = (int)mDelayReadHead_left;
+            int readHead_x_left = static_cast<int>(mDelayReadHead_left);
             int readHead_x1_left = (readHead_x_left + 1) % mCircularBufferLength;
             float readHeadFloat_left = mDelayReadHead_left - readHead_x_left;
 
-            int readHead_x_right = (int)mDelayReadHead_right;
+            int readHead_x_right = static_cast<int>(mDelayReadHead_right);
             int readHead_x1_right = (readHead_x_right + 1) % mCircularBufferLength;
             float readHeadFloat_right = mDelayReadHead_right - readHead_x_right;
 
@@ -290,14 +312,22 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
         }
 
         // Normalize the combined delay
-        combined_delay_left /= total_weight;
-        combined_delay_right /= total_weight;
+        if (total_weight > 0) {
+            combined_delay_left /= total_weight;
+            combined_delay_right /= total_weight;
+        }
 
-        mFeedbackLeft = combined_delay_left * *mFeedbackParameter;
-        mFeedbackRight = combined_delay_right * *mFeedbackParameter;
+        // Soft clipping to prevent overloads
+        combined_delay_left = std::tanh(combined_delay_left);
+        combined_delay_right = std::tanh(combined_delay_right);
+
+        float feedback = *mFeedbackParameter;
+        mFeedbackLeft = combined_delay_left * feedback;
+        mFeedbackRight = combined_delay_right * feedback;
         
-        buffer.setSample(0, sample, buffer.getSample(0, sample) * (1 - *mDryWetParameter) + combined_delay_left * *mDryWetParameter);
-        buffer.setSample(1, sample, buffer.getSample(1, sample) * (1 - *mDryWetParameter) + combined_delay_right * *mDryWetParameter);
+        float dryWet = *mDryWetParameter;
+        buffer.setSample(0, sample, inputLeft * (1 - dryWet) + combined_delay_left * dryWet);
+        buffer.setSample(1, sample, inputRight * (1 - dryWet) + combined_delay_right * dryWet);
         
         mCircularBufferWriteHead++;
         if (mCircularBufferWriteHead >= mCircularBufferLength) {
