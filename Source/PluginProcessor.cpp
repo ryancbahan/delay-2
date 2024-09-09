@@ -283,11 +283,17 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
             float mDelayReadHead_left = mCircularBufferWriteHead - mDelayTimeInSamples_left[i];
             float mDelayReadHead_right = mCircularBufferWriteHead - mDelayTimeInSamples_right[i] - mStereoOffsetSmooth;
 
-            // Pitch shift for even-numbered delay lines (octave up)
-            if (i % 2 == 0) {
-                mDelayReadHead_left *= 2.0f;
-                mDelayReadHead_right *= 2.0f;
+            // Alternating pitch shift: normal, octave up, normal, octave down
+            if (i % 2 == 1) {  // Odd numbered delay lines (second, fourth, etc.)
+                if (i % 4 == 1) {  // Second, sixth, tenth, etc. delay lines
+                    mDelayReadHead_left *= 2.0f;  // Octave up
+                    mDelayReadHead_right *= 2.0f;
+                } else {  // Fourth, eighth, twelfth, etc. delay lines
+                    mDelayReadHead_left *= 0.5f;  // Octave down
+                    mDelayReadHead_right *= 0.5f;
+                }
             }
+            // Even numbered delay lines (including the first) remain unshifted
 
             // Ensure read heads are within buffer bounds
             mDelayReadHead_left = std::fmod(mDelayReadHead_left, static_cast<float>(mCircularBufferLength));
@@ -339,7 +345,6 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
         mLfoPhase = std::fmod(mLfoPhase, 1.0f);
     }
 }
-
 
 //==============================================================================
 bool DelaytutorialAudioProcessor::hasEditor() const
