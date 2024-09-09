@@ -345,7 +345,7 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
         
         // Apply Harmonic Tremolo
         float tremLfo = 0.5f + 0.5f * sinf(2.0f * M_PI * tremPhase);
-        float lowPass = combined_delay_left * (1.0f - tremDepth * tremLfo) + combined_delay_right * (tremDepth * tremLfo);
+        float lowPass = combined_delay_left * (1.0f - (tremDepth / mDelayFraction) * tremLfo) + combined_delay_right * (tremDepth * tremLfo);
         float highPass = combined_delay_left * (tremDepth * tremLfo) + combined_delay_right * (1.0f - tremDepth * tremLfo);
 
         float feedback = *mFeedbackParameter;
