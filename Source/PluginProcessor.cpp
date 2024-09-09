@@ -220,6 +220,8 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     
     float smoothCoeff = std::exp(-2.0f * M_PI * 20.0f / getSampleRate());
 
+    const float minDelayTimeInSamples = 0.025f * getSampleRate(); // 25ms in samples
+
     for (int sample = 0; sample < buffer.getNumSamples(); sample++)
     {
         mCircularBufferLeft[mCircularBufferWriteHead] = leftChannel[sample] + mFeedbackLeft;
@@ -253,6 +255,12 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
             
             float targetDelayTimeInSamples_left = baseDelayTimeInSamples * delayMultiplier * (1.0f + lfoModulation_left);
             float targetDelayTimeInSamples_right = baseDelayTimeInSamples * delayMultiplier * (1.0f + lfoModulation_right);
+
+            // Check if delay time is below 25ms and triple it if so
+            if (targetDelayTimeInSamples_left < minDelayTimeInSamples)
+                targetDelayTimeInSamples_left *= 3.0f;
+            if (targetDelayTimeInSamples_right < minDelayTimeInSamples)
+                targetDelayTimeInSamples_right *= 3.0f;
 
             // Smooth the delay times
             mDelayTimeInSamples_left[i] = mDelayTimeInSamples_left[i] * smoothCoeff + targetDelayTimeInSamples_left * (1.0f - smoothCoeff);
