@@ -78,13 +78,17 @@ private:
     int mCircularBufferWriteHead;
     int mCircularBufferLength;
     
-    float mDelayTimeInSamples_left;
-    float mDelayTimeInSamples_right;
     float mDelayReadHead_left;
     float mDelayReadHead_right;
     
     float mFeedbackLeft;
     float mFeedbackRight;
+    
+    static const int NUM_DELAY_LINES = 4;  // Number of delay lines
+    float mDelayFraction = 0.66f;  // Each delay line will be this fraction of the previous
+    
+    float mDelayTimeInSamples_left[NUM_DELAY_LINES];
+    float mDelayTimeInSamples_right[NUM_DELAY_LINES];
     
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DelaytutorialAudioProcessor)

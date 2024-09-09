@@ -33,8 +33,6 @@ DelaytutorialAudioProcessor::DelaytutorialAudioProcessor()
     mCircularBufferRight = nullptr;
     mCircularBufferWriteHead = 0;
     mCircularBufferLength = 0;
-    mDelayTimeInSamples_left = 0;
-    mDelayTimeInSamples_right = 0;
     mDelayReadHead_left = 0;
     mDelayReadHead_right = 0;
     mFeedbackLeft = 0;
@@ -43,6 +41,14 @@ DelaytutorialAudioProcessor::DelaytutorialAudioProcessor()
     mLfoPhase = 0;
     mLfoDepthSmooth = 0;
     mStereoOffsetSmooth = 0;
+    mDelayFraction = 0.66f;
+    
+    for (int i = 0; i < NUM_DELAY_LINES; ++i)
+    {
+        mDelayTimeInSamples_left[i] = 0.0f;
+        mDelayTimeInSamples_right[i] = 0.0f;
+    }
+
 }
 
 DelaytutorialAudioProcessor::~DelaytutorialAudioProcessor()
@@ -123,13 +129,18 @@ void DelaytutorialAudioProcessor::changeProgramName (int index, const juce::Stri
 //==============================================================================
 void DelaytutorialAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    mDelayTimeInSamples_left = 0;
-    mDelayTimeInSamples_right = 0;
+    for (int i = 0; i < NUM_DELAY_LINES; ++i)
+    {
+        mDelayTimeInSamples_left[i] = 0.0f;
+        mDelayTimeInSamples_right[i] = 0.0f;
+    }
     mDelayReadHead_left = 0;
     mDelayReadHead_right = 0;
     mLfoPhase = 0;
     mLfoDepthSmooth = 0;
     mStereoOffsetSmooth = 0;
+    mDelayFraction = 0.66f;
+
     
     mCircularBufferWriteHead = 0;
     mCircularBufferLength = sampleRate * MAX_DELAY_TIME;
@@ -201,14 +212,12 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     float* leftChannel = buffer.getWritePointer(0);
     float* rightChannel = buffer.getWritePointer(1);
     
-    // Move this outside the loop for efficiency
     float delayTimeInSeconds = *mDelayTimeParameter;
     float baseDelayTimeInSamples = getSampleRate() * delayTimeInSeconds;
     float lfoPhaseOffset = *mLfoPhaseParameter;
     float stereoOffsetInMs = lfoPhaseOffset * 50.0f;
     float stereoOffset = stereoOffsetInMs * 0.001f * getSampleRate();
     
-    // Adjust smoothing coefficient for better results
     float smoothCoeff = std::exp(-2.0f * M_PI * 20.0f / getSampleRate());
 
     for (int sample = 0; sample < buffer.getNumSamples(); sample++)
@@ -216,64 +225,83 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
         mCircularBufferLeft[mCircularBufferWriteHead] = leftChannel[sample] + mFeedbackLeft;
         mCircularBufferRight[mCircularBufferWriteHead] = rightChannel[sample] + mFeedbackRight;
         
-        // Calculate LFO
-        float lfoPhase_left = mLfoPhase;
-        float lfoPhase_right = mLfoPhase + lfoPhaseOffset;
-        
-        // Wrap phases between 0 and 1
-        lfoPhase_left = std::fmod(lfoPhase_left, 1.0f);
-        lfoPhase_right = std::fmod(lfoPhase_right, 1.0f);
-        
-        float lfoOut_left = (1.0f - std::cos(2.0f * M_PI * lfoPhase_left)) * 0.5f;
-        float lfoOut_right = (1.0f - std::cos(2.0f * M_PI * lfoPhase_right)) * 0.5f;
-        
-        mLfoPhase += *mLfoRateParameter / getSampleRate();
-        mLfoPhase = std::fmod(mLfoPhase, 1.0f);
-        
-        // Apply LFO to delay time
-        float lfoModulation_left = lfoOut_left * *mLfoDepthParameter;
-        float lfoModulation_right = lfoOut_right * *mLfoDepthParameter;
-        
-        float mDelayTimeInSamples_left = baseDelayTimeInSamples * (1.0f + lfoModulation_left);
-        float mDelayTimeInSamples_right = baseDelayTimeInSamples * (1.0f + lfoModulation_right);
-        
         // Smooth the stereo offset
         mStereoOffsetSmooth = mStereoOffsetSmooth * smoothCoeff + stereoOffset * (1.0f - smoothCoeff);
-        
-        float mDelayReadHead_left = mCircularBufferWriteHead - mDelayTimeInSamples_left;
-        float mDelayReadHead_right = mCircularBufferWriteHead - mDelayTimeInSamples_right - mStereoOffsetSmooth;
-        
-        // Ensure read heads are within buffer bounds
-        if (mDelayReadHead_left < 0) {
-            mDelayReadHead_left += mCircularBufferLength;
+
+        float combined_delay_left = 0.0f;
+        float combined_delay_right = 0.0f;
+        float total_weight = 0.0f;
+
+        for (int i = 0; i < NUM_DELAY_LINES; ++i)
+        {
+            float delayMultiplier = std::pow(mDelayFraction, i);
+            float weight = 1.0f / (i + 1);  // Decreasing weight for each delay line
+
+            // Unique LFO phase for each delay line
+            float uniqueLfoPhase_left = mLfoPhase + (float)i / NUM_DELAY_LINES;
+            float uniqueLfoPhase_right = uniqueLfoPhase_left + lfoPhaseOffset;
+            
+            // Wrap phases between 0 and 1
+            uniqueLfoPhase_left = std::fmod(uniqueLfoPhase_left, 1.0f);
+            uniqueLfoPhase_right = std::fmod(uniqueLfoPhase_right, 1.0f);
+            
+            float lfoOut_left = (1.0f - std::cos(2.0f * M_PI * uniqueLfoPhase_left)) * 0.5f;
+            float lfoOut_right = (1.0f - std::cos(2.0f * M_PI * uniqueLfoPhase_right)) * 0.5f;
+            
+            float lfoModulation_left = lfoOut_left * *mLfoDepthParameter;
+            float lfoModulation_right = lfoOut_right * *mLfoDepthParameter;
+            
+            float targetDelayTimeInSamples_left = baseDelayTimeInSamples * delayMultiplier * (1.0f + lfoModulation_left);
+            float targetDelayTimeInSamples_right = baseDelayTimeInSamples * delayMultiplier * (1.0f + lfoModulation_right);
+
+            // Smooth the delay times
+            mDelayTimeInSamples_left[i] = mDelayTimeInSamples_left[i] * smoothCoeff + targetDelayTimeInSamples_left * (1.0f - smoothCoeff);
+            mDelayTimeInSamples_right[i] = mDelayTimeInSamples_right[i] * smoothCoeff + targetDelayTimeInSamples_right * (1.0f - smoothCoeff);
+
+            float mDelayReadHead_left = mCircularBufferWriteHead - mDelayTimeInSamples_left[i];
+            float mDelayReadHead_right = mCircularBufferWriteHead - mDelayTimeInSamples_right[i] - mStereoOffsetSmooth;
+
+            // Ensure read heads are within buffer bounds
+            if (mDelayReadHead_left < 0) mDelayReadHead_left += mCircularBufferLength;
+            if (mDelayReadHead_right < 0) mDelayReadHead_right += mCircularBufferLength;
+
+            int readHead_x_left = (int)mDelayReadHead_left;
+            int readHead_x1_left = (readHead_x_left + 1) % mCircularBufferLength;
+            float readHeadFloat_left = mDelayReadHead_left - readHead_x_left;
+
+            int readHead_x_right = (int)mDelayReadHead_right;
+            int readHead_x1_right = (readHead_x_right + 1) % mCircularBufferLength;
+            float readHeadFloat_right = mDelayReadHead_right - readHead_x_right;
+
+            float delay_sample_left = lin_interp(mCircularBufferLeft[readHead_x_left], mCircularBufferLeft[readHead_x1_left], readHeadFloat_left);
+            float delay_sample_right = lin_interp(mCircularBufferRight[readHead_x_right], mCircularBufferRight[readHead_x1_right], readHeadFloat_right);
+
+            combined_delay_left += delay_sample_left * weight;
+            combined_delay_right += delay_sample_right * weight;
+            total_weight += weight;
         }
-        if (mDelayReadHead_right < 0) {
-            mDelayReadHead_right += mCircularBufferLength;
-        }
+
+        // Normalize the combined delay
+        combined_delay_left /= total_weight;
+        combined_delay_right /= total_weight;
+
+        mFeedbackLeft = combined_delay_left * *mFeedbackParameter;
+        mFeedbackRight = combined_delay_right * *mFeedbackParameter;
         
-        int readHead_x_left = (int)mDelayReadHead_left;
-        int readHead_x1_left = (readHead_x_left + 1) % mCircularBufferLength;
-        float readHeadFloat_left = mDelayReadHead_left - readHead_x_left;
-        
-        int readHead_x_right = (int)mDelayReadHead_right;
-        int readHead_x1_right = (readHead_x_right + 1) % mCircularBufferLength;
-        float readHeadFloat_right = mDelayReadHead_right - readHead_x_right;
-        
-        float delay_sample_left = lin_interp(mCircularBufferLeft[readHead_x_left], mCircularBufferLeft[readHead_x1_left], readHeadFloat_left);
-        float delay_sample_right = lin_interp(mCircularBufferRight[readHead_x_right], mCircularBufferRight[readHead_x1_right], readHeadFloat_right);
-        
-        mFeedbackLeft = delay_sample_left * *mFeedbackParameter;
-        mFeedbackRight = delay_sample_right * *mFeedbackParameter;
-        
-        buffer.setSample(0, sample, buffer.getSample(0, sample) * (1 - *mDryWetParameter) + delay_sample_left * *mDryWetParameter);
-        buffer.setSample(1, sample, buffer.getSample(1, sample) * (1 - *mDryWetParameter) + delay_sample_right * *mDryWetParameter);
+        buffer.setSample(0, sample, buffer.getSample(0, sample) * (1 - *mDryWetParameter) + combined_delay_left * *mDryWetParameter);
+        buffer.setSample(1, sample, buffer.getSample(1, sample) * (1 - *mDryWetParameter) + combined_delay_right * *mDryWetParameter);
         
         mCircularBufferWriteHead++;
         if (mCircularBufferWriteHead >= mCircularBufferLength) {
             mCircularBufferWriteHead = 0;
         }
+
+        // Update the main LFO phase
+        mLfoPhase += *mLfoRateParameter / getSampleRate();
+        mLfoPhase = std::fmod(mLfoPhase, 1.0f);
     }
 }
+
 
 //==============================================================================
 bool DelaytutorialAudioProcessor::hasEditor() const
