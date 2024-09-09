@@ -22,7 +22,7 @@ DelaytutorialAudioProcessor::DelaytutorialAudioProcessor()
                        )
 #endif
 {
-    addParameter(mDryWetParameter = new juce::AudioParameterFloat("drywet", "Dry wet", 0.01, 1, 0.5));
+    addParameter(mDryWetParameter = new juce::AudioParameterFloat("drywet", "Dry/wet", 0.01, 1, 0.5));
     addParameter(mFeedbackParameter = new juce::AudioParameterFloat("feedback", "Feedback", 0, 0.98, 0.5));
     addParameter(mDelayTimeParameter = new juce::AudioParameterFloat("delaytime", "Delay time",  0.01, MAX_DELAY_TIME, 0.5));
     addParameter(mLfoRateParameter = new juce::AudioParameterFloat("lforate", "LFO rate",  0.1f, 20.f, 01.f));
@@ -289,15 +289,30 @@ juce::AudioProcessorEditor* DelaytutorialAudioProcessor::createEditor()
 //==============================================================================
 void DelaytutorialAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    // You should use this method to store your parameters in the memory block.
-    // You could do that either as raw data, or use the XML or ValueTree classes
-    // as intermediaries to make it easy to save and load complex data.
+    std::unique_ptr<juce::XmlElement> xml(new juce::XmlElement("delay"));
+    
+    xml->setAttribute("Dry/Wet", *mDryWetParameter);
+    xml->setAttribute("Feedback", *mFeedbackParameter);
+    xml->setAttribute("Delay time", *mDelayTimeParameter);
+    xml->setAttribute("LFO rate", *mLfoRateParameter);
+    xml->setAttribute("LFO depth", *mLfoDepthParameter);
+    xml->setAttribute("LFO phase", *mLfoPhaseParameter);
+    
+    copyXmlToBinary(*xml, destData);
 }
 
 void DelaytutorialAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
-    // You should use this method to restore your parameters from this memory block,
-    // whose contents will have been created by the getStateInformation() call.
+    std::unique_ptr<juce::XmlElement> xml(getXmlFromBinary(data, sizeInBytes));
+    
+    if (xml.get() != nullptr && xml->hasTagName("delay")) {
+        *mDryWetParameter = xml->getDoubleAttribute("Dry/wet");
+        *mFeedbackParameter = xml->getDoubleAttribute("Feedback");
+        *mDelayTimeParameter = xml->getDoubleAttribute("Delay time");
+        *mLfoRateParameter = xml->getDoubleAttribute("LFO rate");
+        *mLfoDepthParameter = xml->getDoubleAttribute("LFO depth");
+        *mLfoPhaseParameter = xml->getDoubleAttribute("LFO phase");
+    }
 }
 
 //==============================================================================
