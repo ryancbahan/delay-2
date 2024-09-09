@@ -337,19 +337,35 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
         // Soft clipping to prevent overloads
         combined_delay_left = std::tanh(combined_delay_left);
         combined_delay_right = std::tanh(combined_delay_right);
+        
+        const float tremRate = 5.0f; // 5 Hz
+        const float tremDepth = 1.0f; // 50% depth
+        static float tremPhase = 0.0f;
+        const float tremPhaseInc = tremRate / getSampleRate();
+        
+        // Apply Harmonic Tremolo
+        float tremLfo = 0.5f + 0.5f * sinf(2.0f * M_PI * tremPhase);
+        float lowPass = combined_delay_left * (1.0f - tremDepth * tremLfo) + combined_delay_right * (tremDepth * tremLfo);
+        float highPass = combined_delay_left * (tremDepth * tremLfo) + combined_delay_right * (1.0f - tremDepth * tremLfo);
 
         float feedback = *mFeedbackParameter;
-        mFeedbackLeft = combined_delay_left * feedback;
-        mFeedbackRight = combined_delay_right * feedback;
+        mFeedbackLeft = lowPass * feedback;
+        mFeedbackRight = highPass * feedback;
         
         float dryWet = *mDryWetParameter;
-        buffer.setSample(0, sample, inputLeft * (1 - dryWet) + combined_delay_left * dryWet);
-        buffer.setSample(1, sample, inputRight * (1 - dryWet) + combined_delay_right * dryWet);
+        buffer.setSample(0, sample, inputLeft * (1 - dryWet) + lowPass * dryWet);
+        buffer.setSample(1, sample, inputRight * (1 - dryWet) + highPass * dryWet);
         
         mCircularBufferWriteHead++;
         if (mCircularBufferWriteHead >= mCircularBufferLength) {
             mCircularBufferWriteHead = 0;
         }
+    
+
+
+        // Update tremolo phase
+        tremPhase += tremPhaseInc;
+        if (tremPhase >= 1.0f) tremPhase -= 1.0f;
 
         // Update the main LFO phase
         mLfoPhase += *mLfoRateParameter / getSampleRate();
