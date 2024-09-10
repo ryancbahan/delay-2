@@ -91,6 +91,9 @@ private:
     float mFeedbackLeft[NUM_DELAY_LINES];
      float mFeedbackRight[NUM_DELAY_LINES];
     
+    float mFilterStatesLeft[8] = {0};
+    float mFilterStatesRight[8] = {0};
+    
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DelaytutorialAudioProcessor)
 };
