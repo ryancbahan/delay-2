@@ -26,7 +26,7 @@ DelaytutorialAudioProcessor::DelaytutorialAudioProcessor()
     addParameter(mFeedbackParameter = new juce::AudioParameterFloat("feedback", "Feedback", 0, 0.98, 0.5));
     addParameter(mDelayTimeParameter = new juce::AudioParameterFloat("delaytime", "Delay time",  0.01, MAX_DELAY_TIME, 0.5));
     addParameter(mLfoRateParameter = new juce::AudioParameterFloat("lforate", "LFO rate",  0.1f, 20.f, 01.f));
-    addParameter(mLfoDepthParameter = new juce::AudioParameterFloat("lfodepth", "LFO depth",  0.0f, 0.1f, 0.05f));
+    addParameter(mLfoDepthParameter = new juce::AudioParameterFloat("lfodepth", "LFO depth",  0.0f, 0.25f, 0.05f));
     addParameter(mLfoPhaseParameter = new juce::AudioParameterFloat("lfophase", "LFO phase",  0.0f, 1.f, 0.f));
     
     mCircularBufferLeft = nullptr;
@@ -338,7 +338,7 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
                     mFilterStatesRight[i] = mFilterStatesRight[i] + (1.0f - mCircularBufferRight[readIndex]);
                     
                     // Apply density envelope to early reflections (with reduced initial gain)
-                    float reflectionGain = reflectionGains[i] * 0.2f; // Reduced initial gain
+                    float reflectionGain = reflectionGains[i] * 0.9f; // Reduced initial gain
                     earlyReflectionLeft += mFilterStatesLeft[i] * reflectionGain;
                     earlyReflectionRight += mFilterStatesRight[i] * reflectionGain;
                 }
