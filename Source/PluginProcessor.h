@@ -89,7 +89,12 @@ private:
     float mDelayTimeInSamples_right[NUM_DELAY_LINES];
     
     float mFeedbackLeft[NUM_DELAY_LINES];
-     float mFeedbackRight[NUM_DELAY_LINES];
+    float mFeedbackRight[NUM_DELAY_LINES];
+    float mIrregularDelayFactor = 0.2f;
+    float densityEnvelope;
+    
+    float mFilterStatesLeft[8] = {0};
+    float mFilterStatesRight[8] = {0};
     
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DelaytutorialAudioProcessor)

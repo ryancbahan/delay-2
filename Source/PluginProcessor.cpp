@@ -138,6 +138,7 @@ void DelaytutorialAudioProcessor::prepareToPlay (double sampleRate, int samplesP
     mLfoDepthSmooth = 0;
     mStereoOffsetSmooth = 0;
     mDelayFraction = 0.66f;
+    densityEnvelope = 0.0f;
 
     
     mCircularBufferWriteHead = 0;
@@ -220,18 +221,28 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
 
     const float minDelayTimeInSamples = 0.025f * getSampleRate(); // 25ms in samples
 
+    // Early reflections setup
+    const int numReflections = 8;
+    float reflectionDelays[numReflections] = {0.05f, 0.10f, 0.15f, 0.20f, 0.25f, 0.30f, 0.35f, 0.40f}; // in seconds
+    float reflectionGains[numReflections] = {0.6f, 0.5f, 0.4f, 0.3f, 0.2f, 0.1f, 0.05f, 0.025f};
+
+    // Convert reflection delays to samples
+    int reflectionDelaySamples[numReflections];
+    for (int i = 0; i < numReflections; ++i) {
+        reflectionDelaySamples[i] = static_cast<int>(reflectionDelays[i] * getSampleRate());
+    }
+
+    // Low-pass filter coefficients
+    float filterCoeffs[numReflections];
+    for (int i = 0; i < numReflections; ++i) {
+        float cutoff = 20000.0f * std::pow(0.95f, i); // Exponentially decreasing cutoff frequency
+        float w0 = 2.0f * M_PI * cutoff / getSampleRate();
+        filterCoeffs[i] = std::exp(-w0);
+    }
+
     // DC blocking filter coefficients
     const float R = 0.995f;
     static float lastInputLeft = 0.0f, lastInputRight = 0.0f, lastOutputLeft = 0.0f, lastOutputRight = 0.0f;
-
-    // All-pass filter coefficients (for diffusion)
-    const float allpassCoeff = 0.7f;
-    static float allpassBufferLeft[NUM_DELAY_LINES][4] = {{0.0f}};
-    static float allpassBufferRight[NUM_DELAY_LINES][4] = {{0.0f}};
-
-    // Density build-up parameters
-    const float densityBuildupRate = 0.99f; // Adjust this value to control build-up speed
-    static float densityFactor = 0.0f;
 
     // Feedback matrix
     static const float feedbackMatrix[NUM_DELAY_LINES][NUM_DELAY_LINES] = {
@@ -255,12 +266,15 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
 
     // Prime-based waveshaping amounts
     const float primes[NUM_DELAY_LINES] = {2.0f, 3.0f, 5.0f, 7.0f};
-    const float baseWaveshapeAmount = 5.0f;
+    const float baseWaveshapeAmount = 3.0f;
 
-    // DC blocking filter
-    float dcBlockCoeff = 0.995f;
-    static float dcBlockerStateLeft = 0.0f;
-    static float dcBlockerStateRight = 0.0f;
+    // Density envelope
+    static float densityEnvelope = 1.0f;
+    const float densityAttackRate = 0.999995f; // Much slower buildup
+    const float maxDensity = 0.7f; // Limit maximum density
+
+    // Predelay for early reflections
+    const int predelaySamples = static_cast<int>(0.02f * getSampleRate()); // 20ms predelay
 
     for (int sample = 0; sample < buffer.getNumSamples(); sample++)
     {
@@ -274,24 +288,40 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
         lastOutputLeft = outputLeft;
         lastOutputRight = outputRight;
 
-        // Prepare feedback using the matrix
-        float feedbackLeft[NUM_DELAY_LINES] = {0.0f};
-        float feedbackRight[NUM_DELAY_LINES] = {0.0f};
+        // Write to circular buffer
+        mCircularBufferLeft[mCircularBufferWriteHead] = outputLeft;
+        mCircularBufferRight[mCircularBufferWriteHead] = outputRight;
 
-        for (int i = 0; i < NUM_DELAY_LINES; ++i) {
-            for (int j = 0; j < NUM_DELAY_LINES; ++j) {
-                feedbackLeft[i] += mFeedbackLeft[j] * feedbackMatrix[i][j];
-                feedbackRight[i] += mFeedbackRight[j] * feedbackMatrix[i][j];
-            }
+        // Calculate early reflections with low-pass filtering, density envelope, and predelay
+        float earlyReflectionLeft = 0.0f;
+        float earlyReflectionRight = 0.0f;
+        for (int i = 0; i < numReflections; ++i)
+        {
+            int readIndex = (mCircularBufferWriteHead - reflectionDelaySamples[i] - predelaySamples + mCircularBufferLength) % mCircularBufferLength;
+
+            // Apply low-pass filter
+            mFilterStatesLeft[i] = filterCoeffs[i] * mFilterStatesLeft[i] + (1.0f - filterCoeffs[i]) * mCircularBufferLeft[readIndex];
+            mFilterStatesRight[i] = filterCoeffs[i] * mFilterStatesRight[i] + (1.0f - filterCoeffs[i]) * mCircularBufferRight[readIndex];
+
+            // Apply density envelope to early reflections (with reduced initial gain)
+            float reflectionGain = reflectionGains[i] * densityEnvelope * 0.2f; // Reduced initial gain
+            earlyReflectionLeft += mFilterStatesLeft[i] * reflectionGain;
+            earlyReflectionRight += mFilterStatesRight[i] * reflectionGain;
         }
 
-        // Write to circular buffer with feedback
+        // Main delay line processing
         float summedFeedbackLeft = 0.0f;
         float summedFeedbackRight = 0.0f;
         for (int i = 0; i < NUM_DELAY_LINES; ++i) {
-            summedFeedbackLeft += feedbackLeft[i];
-            summedFeedbackRight += feedbackRight[i];
+            for (int j = 0; j < NUM_DELAY_LINES; ++j) {
+                summedFeedbackLeft += mFeedbackLeft[j] * feedbackMatrix[i][j];
+                summedFeedbackRight += mFeedbackRight[j] * feedbackMatrix[i][j];
+            }
         }
+        
+        // Apply density envelope to feedback
+        summedFeedbackLeft *= densityEnvelope;
+        summedFeedbackRight *= densityEnvelope;
         
         // Balance feedback between channels
         float maxFeedback = std::max(std::abs(summedFeedbackLeft), std::abs(summedFeedbackRight));
@@ -299,9 +329,6 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
             summedFeedbackLeft /= maxFeedback;
             summedFeedbackRight /= maxFeedback;
         }
-        
-        mCircularBufferLeft[mCircularBufferWriteHead] = outputLeft + summedFeedbackLeft;
-        mCircularBufferRight[mCircularBufferWriteHead] = outputRight + summedFeedbackRight;
         
         // Smooth the stereo offset
         mStereoOffsetSmooth = mStereoOffsetSmooth * smoothCoeff + stereoOffset * (1.0f - smoothCoeff);
@@ -312,26 +339,12 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
 
         for (int i = 0; i < NUM_DELAY_LINES; ++i)
         {
-            // Define prime numbers for irregular delay multipliers
-            const float delayPrimes[NUM_DELAY_LINES] = {2.0f, 3.0f, 5.0f, 7.0f};
-
-            // In the class definition, add a new member variable:
-            float mIrregularDelayFactor;
-
-            // In the constructor or prepareToPlay, initialize this factor:
-            mIrregularDelayFactor = 0.2f; // Adjust this value to control the irregularity
-
-            // In the processBlock function, replace the original delay multiplier line with:
-            float delayMultiplier = 1.0f + (delayPrimes[i] / 7.0f - 1.0f) * mIrregularDelayFactor;
+            float delayMultiplier = 1.0f + (primes[i] / 7.0f - 1.0f) * mIrregularDelayFactor;
             float weight = 1.0f / (i + 1);  // Decreasing weight for each delay line
 
             // Unique LFO phase for each delay line
-            float uniqueLfoPhase_left = mLfoPhase + (float)i / NUM_DELAY_LINES;
-            float uniqueLfoPhase_right = uniqueLfoPhase_left + lfoPhaseOffset;
-            
-            // Wrap phases between 0 and 1
-            uniqueLfoPhase_left = std::fmod(uniqueLfoPhase_left, 1.0f);
-            uniqueLfoPhase_right = std::fmod(uniqueLfoPhase_right, 1.0f);
+            float uniqueLfoPhase_left = std::fmod(mLfoPhase + (float)i / NUM_DELAY_LINES, 1.0f);
+            float uniqueLfoPhase_right = std::fmod(uniqueLfoPhase_left + lfoPhaseOffset, 1.0f);
             
             float lfoOut_left = (1.0f - std::cos(2.0f * M_PI * uniqueLfoPhase_left)) * 0.0725f;
             float lfoOut_right = (1.0f - std::cos(2.0f * M_PI * uniqueLfoPhase_right)) * 0.0725f;
@@ -342,47 +355,28 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
             float targetDelayTimeInSamples_left = baseDelayTimeInSamples * delayMultiplier * (1.0f + lfoModulation_left);
             float targetDelayTimeInSamples_right = baseDelayTimeInSamples * delayMultiplier * (1.0f + lfoModulation_right);
 
-            // Check if delay time is below 25ms and triple it if so
-            if (targetDelayTimeInSamples_left < minDelayTimeInSamples)
-                targetDelayTimeInSamples_left *= 3.0f;
-            if (targetDelayTimeInSamples_right < minDelayTimeInSamples)
-                targetDelayTimeInSamples_right *= 3.0f;
+            // Ensure delay times are within valid range
+            targetDelayTimeInSamples_left = juce::jlimit(minDelayTimeInSamples, static_cast<float>(mCircularBufferLength - 1), targetDelayTimeInSamples_left);
+            targetDelayTimeInSamples_right = juce::jlimit(minDelayTimeInSamples, static_cast<float>(mCircularBufferLength - 1), targetDelayTimeInSamples_right);
 
             // Smooth the delay times
             mDelayTimeInSamples_left[i] = mDelayTimeInSamples_left[i] * smoothCoeff + targetDelayTimeInSamples_left * (1.0f - smoothCoeff);
             mDelayTimeInSamples_right[i] = mDelayTimeInSamples_right[i] * smoothCoeff + targetDelayTimeInSamples_right * (1.0f - smoothCoeff);
 
-            float mDelayReadHead_left = mCircularBufferWriteHead - mDelayTimeInSamples_left[i];
-            float mDelayReadHead_right = mCircularBufferWriteHead - mDelayTimeInSamples_right[i] - mStereoOffsetSmooth;
+            // Calculate read heads with safe wrapping
+            float mDelayReadHead_left = std::fmod(mCircularBufferWriteHead - mDelayTimeInSamples_left[i] + mCircularBufferLength, static_cast<float>(mCircularBufferLength));
+            float mDelayReadHead_right = std::fmod(mCircularBufferWriteHead - mDelayTimeInSamples_right[i] - mStereoOffsetSmooth + mCircularBufferLength, static_cast<float>(mCircularBufferLength));
 
             // Pitch shifting logic
             if (i % 2 == 1) {  // Odd numbered delay lines (second, fourth, etc.)
                 if (i % 4 == 1) {  // Second, sixth, tenth, etc. delay lines
-                    mDelayReadHead_left *= 2.0f;  // Octave up
-                    mDelayReadHead_right *= 2.0f;
+                    mDelayReadHead_left = std::fmod(mDelayReadHead_left * 2.0f, static_cast<float>(mCircularBufferLength));
+                    mDelayReadHead_right = std::fmod(mDelayReadHead_right * 2.0f, static_cast<float>(mCircularBufferLength));
                 } else {  // Fourth, eighth, twelfth, etc. delay lines
-                    mDelayReadHead_left *= 0.5f;  // Octave down
-                    mDelayReadHead_right *= 0.5f;
+                    mDelayReadHead_left = std::fmod(mDelayReadHead_left * 0.5f + mCircularBufferLength, static_cast<float>(mCircularBufferLength));
+                    mDelayReadHead_right = std::fmod(mDelayReadHead_right * 0.5f + mCircularBufferLength, static_cast<float>(mCircularBufferLength));
                 }
             }
-
-            // Ensure we never go below -1 octave
-            float minReadSpeed = 0.25f;  // -1 octave
-            float maxDelayTime_left = mCircularBufferWriteHead - mDelayReadHead_left;
-            float maxDelayTime_right = mCircularBufferWriteHead - mDelayReadHead_right;
-
-            if (maxDelayTime_left > mDelayTimeInSamples_left[i] / minReadSpeed) {
-                mDelayReadHead_left = mCircularBufferWriteHead - (mDelayTimeInSamples_left[i] / minReadSpeed);
-            }
-            if (maxDelayTime_right > mDelayTimeInSamples_right[i] / minReadSpeed) {
-                mDelayReadHead_right = mCircularBufferWriteHead - (mDelayTimeInSamples_right[i] / minReadSpeed);
-            }
-
-            // Ensure read heads are within buffer bounds
-            mDelayReadHead_left = std::fmod(mDelayReadHead_left, static_cast<float>(mCircularBufferLength));
-            mDelayReadHead_right = std::fmod(mDelayReadHead_right, static_cast<float>(mCircularBufferLength));
-            if (mDelayReadHead_left < 0) mDelayReadHead_left += mCircularBufferLength;
-            if (mDelayReadHead_right < 0) mDelayReadHead_right += mCircularBufferLength;
 
             int readHead_x_left = static_cast<int>(mDelayReadHead_left);
             int readHead_x1_left = (readHead_x_left + 1) % mCircularBufferLength;
@@ -392,49 +386,30 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
             int readHead_x1_right = (readHead_x_right + 1) % mCircularBufferLength;
             float readHeadFloat_right = mDelayReadHead_right - readHead_x_right;
 
-            // Implement crossfade for buffer wraparound
-            float delay_sample_left, delay_sample_right;
-            if (readHead_x1_left < readHead_x_left) {
-                float fade = (float)readHead_x1_left / mCircularBufferLength;
-                delay_sample_left = lin_interp(mCircularBufferLeft[readHead_x_left], mCircularBufferLeft[0], fade);
-            } else {
-                delay_sample_left = lin_interp(mCircularBufferLeft[readHead_x_left], mCircularBufferLeft[readHead_x1_left], readHeadFloat_left);
-            }
+            // Linear interpolation
+            float delay_sample_left = lin_interp(mCircularBufferLeft[readHead_x_left], mCircularBufferLeft[readHead_x1_left], readHeadFloat_left);
+            float delay_sample_right = lin_interp(mCircularBufferRight[readHead_x_right], mCircularBufferRight[readHead_x1_right], readHeadFloat_right);
 
-            if (readHead_x1_right < readHead_x_right) {
-                float fade = (float)readHead_x1_right / mCircularBufferLength;
-                delay_sample_right = lin_interp(mCircularBufferRight[readHead_x_right], mCircularBufferRight[0], fade);
-            } else {
-                delay_sample_right = lin_interp(mCircularBufferRight[readHead_x_right], mCircularBufferRight[readHead_x1_right], readHeadFloat_right);
-            }
-
-            // Apply prime-based waveshaping with smoother transition
-            float waveshapeAmount = baseWaveshapeAmount * primes[i] / 7.0f; // Normalize by the largest prime
+            // Apply prime-based waveshaping
+            float waveshapeAmount = baseWaveshapeAmount * primes[i] / 7.0f;
             delay_sample_left = softClip(delay_sample_left, waveshapeAmount);
             delay_sample_right = softClip(delay_sample_right, waveshapeAmount);
             
-            float compensationFactor = 0.5f; // Adjust this value to control overall volume
+            float compensationFactor = 0.5f;
             delay_sample_left *= compensationFactor;
             delay_sample_right *= compensationFactor;
 
-            // After combining delay lines, add an extra saturation stage with volume compensation
-            combined_delay_left = softClip(combined_delay_left * 2.0f, 1.0f) * 0.5f * compensationFactor;
-            combined_delay_right = softClip(combined_delay_right * 2.0f, 1.0f) * 0.5f * compensationFactor;
-
-            // Apply all-pass diffusion
-            for (int j = 0; j < 4; ++j) {
-                float allpass_out_left = allpassCoeff * (delay_sample_left - allpassBufferLeft[i][j]) + allpassBufferLeft[i][j];
-                allpassBufferLeft[i][j] = delay_sample_left;
-                delay_sample_left = allpass_out_left;
-
-                float allpass_out_right = allpassCoeff * (delay_sample_right - allpassBufferRight[i][j]) + allpassBufferRight[i][j];
-                allpassBufferRight[i][j] = delay_sample_right;
-                delay_sample_right = allpass_out_right;
-            }
+            // Apply density envelope to delay lines
+            delay_sample_left *= densityEnvelope;
+            delay_sample_right *= densityEnvelope;
 
             combined_delay_left += delay_sample_left * weight;
             combined_delay_right += delay_sample_right * weight;
             total_weight += weight;
+
+            // Update feedback for next iteration (with reduced initial feedback)
+            mFeedbackLeft[i] = delay_sample_left * (*mFeedbackParameter) * densityEnvelope;
+            mFeedbackRight[i] = delay_sample_right * (*mFeedbackParameter) * densityEnvelope;
         }
 
         // Normalize the combined delay
@@ -443,67 +418,30 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
             combined_delay_right /= total_weight;
         }
 
-        // Apply density build-up
-        densityFactor = densityFactor * densityBuildupRate + (1.0f - densityBuildupRate);
-        combined_delay_left *= densityFactor;
-        combined_delay_right *= densityFactor;
+        // Combine main delay output with early reflections
+        outputLeft = combined_delay_left + earlyReflectionLeft;
+        outputRight = combined_delay_right + earlyReflectionRight;
 
-        // Apply DC blocking filter
-        float dcBlockedLeft = combined_delay_left - dcBlockerStateLeft + dcBlockCoeff * dcBlockerStateLeft;
-        dcBlockerStateLeft = dcBlockedLeft;
-        float dcBlockedRight = combined_delay_right - dcBlockerStateRight + dcBlockCoeff * dcBlockerStateRight;
-        dcBlockerStateRight = dcBlockedRight;
-
-        combined_delay_left = dcBlockedLeft;
-        combined_delay_right = dcBlockedRight;
-
-        // Soft clipping to prevent overloads
-        combined_delay_left = std::tanh(combined_delay_left);
-        combined_delay_right = std::tanh(combined_delay_right);
+        // Apply soft clipping to the output
+        outputLeft = std::tanh(outputLeft);
+        outputRight = std::tanh(outputRight);
         
-        const float tremRate = 2.0f; // 2 Hz
-        const float tremDepth = 0.5f; // 50% depth
-        static float tremPhase = 0.0f;
-        const float tremPhaseInc = tremRate / getSampleRate();
+        // Mix dry and wet signals with gradual wet increase
+        float dryWet = *mDryWetParameter * densityEnvelope;
+        outputLeft = inputLeft * (1 - dryWet) + outputLeft * dryWet;
+        outputRight = inputRight * (1 - dryWet) + outputRight * dryWet;
         
-        // Apply Harmonic Tremolo
-               float tremLfo = 0.5f + 0.5f * sinf(2.0f * M_PI * tremPhase);
-               float lowPass = combined_delay_left * (1.0f - (tremDepth / mDelayFraction) * (tremLfo * 3)) + combined_delay_right * (tremDepth * tremLfo);
-        
-        float highPass = combined_delay_left * (tremDepth * tremLfo) + combined_delay_right * (1.0f - tremDepth * tremLfo);
-
-                // Scale down the feedback
-                float feedback = *mFeedbackParameter * 0.5f; // Reduce feedback by half
-                for (int i = 0; i < NUM_DELAY_LINES; ++i) {
-                    mFeedbackLeft[i] = lowPass * feedback;
-                    mFeedbackRight[i] = highPass * feedback;
-                }
-                
-                float dryWet = *mDryWetParameter;
-                 outputLeft = inputLeft * (1 - dryWet) + lowPass * dryWet;
-                 outputRight = inputRight * (1 - dryWet) + highPass * dryWet;
-                
-                // Apply soft clipping to the output
-                outputLeft = std::tanh(outputLeft);
-                outputRight = std::tanh(outputRight);
-                
-                buffer.setSample(0, sample, outputLeft);
+        buffer.setSample(0, sample, outputLeft);
                 buffer.setSample(1, sample, outputRight);
                 
-                // Smoother transition for circular buffer write head
-                mCircularBufferWriteHead++;
-                if (mCircularBufferWriteHead >= mCircularBufferLength) {
-                    mCircularBufferWriteHead = 0;
-                    // Implement a short crossfade here if needed
-                }
-            
-                // Update tremolo phase
-                tremPhase += tremPhaseInc;
-                if (tremPhase >= 1.0f) tremPhase -= 1.0f;
+                // Update circular buffer write head
+                mCircularBufferWriteHead = (mCircularBufferWriteHead + 1) % mCircularBufferLength;
 
-                // Update the main LFO phase
-                mLfoPhase += *mLfoRateParameter / getSampleRate();
-                mLfoPhase = std::fmod(mLfoPhase, 1.0f);
+                // Update LFO phase
+                mLfoPhase = std::fmod(mLfoPhase + *mLfoRateParameter / getSampleRate(), 1.0f);
+
+                // Update density envelope with a maximum limit
+                densityEnvelope = std::min(maxDensity, 1.0f - (1.0f - densityEnvelope) * densityAttackRate);
             }
         }
 
