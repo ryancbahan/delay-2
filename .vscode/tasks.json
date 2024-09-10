@@ -1,0 +1,29 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "type": "shell",
+            "label": "Build JUCE AU Component",
+            "command": "xcodebuild",
+            "args": [
+                "-project",
+                "${workspaceFolder}/Builds/MacOSX/delay-3.xcodeproj",
+                "-configuration",
+                "Debug",
+                "-scheme",
+                "delay-3 - AU",
+                "BUILD_DIR=${workspaceFolder}/Builds/MacOSX/build"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        }
+    ]
+}

@@ -27,7 +27,7 @@ DelaytutorialAudioProcessor::DelaytutorialAudioProcessor()
     addParameter(mFeedbackParameter = new juce::AudioParameterFloat("feedback", "Feedback", 0, 0.98, 0.5));
     addParameter(mDelayTimeParameter = new juce::AudioParameterFloat("delaytime", "Delay time",  0.01, MAX_DELAY_TIME, 0.5));
     addParameter(mLfoRateParameter = new juce::AudioParameterFloat("lforate", "LFO rate",  0.1f, 20.f, 01.f));
-    addParameter(mLfoDepthParameter = new juce::AudioParameterFloat("lfodepth", "LFO depth",  0.0f, 0.1f, 0.05f));
+    addParameter(mLfoDepthParameter = new juce::AudioParameterFloat("lfodepth", "LFO depth",  0.0f, 0.25f, 0.05f));
     addParameter(mLfoPhaseParameter = new juce::AudioParameterFloat("lfophase", "LFO phase",  0.0f, 1.f, 0.f));
     
     mCircularBufferLeft = nullptr;
@@ -312,9 +312,40 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
         float combined_delay_left = 0.0f;
         float combined_delay_right = 0.0f;
         float total_weight = 0.0f;
+        
+        float earlyReflectionLeft = 0.0f;
+        float earlyReflectionRight = 0.0f;
 
         for (int i = 0; i < NUM_DELAY_LINES; ++i)
         {
+            
+            // Early reflections setup
+            const int numReflections = 8;
+            float reflectionDelays[numReflections] = {0.05f, 0.10f, 0.15f, 0.20f, 0.25f, 0.30f, 0.35f, 0.40f}; // in seconds
+            float reflectionGains[numReflections] = {0.6f, 0.5f, 0.4f, 0.3f, 0.2f, 0.1f, 0.05f, 0.025f};
+            const int predelaySamples = static_cast<int>(0.02f * getSampleRate()); // 20ms predelay
+
+            // Convert reflection delays to samples
+            int reflectionDelaySamples[numReflections];
+            for (int i = 0; i < numReflections; ++i) {
+                reflectionDelaySamples[i] = static_cast<int>(reflectionDelays[i] * getSampleRate());
+            }
+            
+            // Calculate early reflections with low-pass filtering, density envelope, and predelay
+                for (int i = 0; i < numReflections; ++i)
+                {
+                    int readIndex = (mCircularBufferWriteHead - reflectionDelaySamples[i] - predelaySamples + mCircularBufferLength) % mCircularBufferLength;
+
+                    // Apply low-pass filter
+                    mFilterStatesLeft[i] = mFilterStatesLeft[i] + (1.0f - mCircularBufferLeft[readIndex]);
+                    mFilterStatesRight[i] = mFilterStatesRight[i] + (1.0f - mCircularBufferRight[readIndex]);
+                    
+                    // Apply density envelope to early reflections (with reduced initial gain)
+                    float reflectionGain = reflectionGains[i] * 0.9f; // Reduced initial gain
+                    earlyReflectionLeft += mFilterStatesLeft[i] * reflectionGain;
+                    earlyReflectionRight += mFilterStatesRight[i] * reflectionGain;
+                }
+            
             // Define prime numbers for irregular delay multipliers
             const float delayPrimes[NUM_DELAY_LINES] = {2.0f, 3.0f, 5.0f, 7.0f};
 
@@ -481,6 +512,10 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
                     mFeedbackLeft[i] = lowPass * feedback;
                     mFeedbackRight[i] = highPass * feedback;
                 }
+        
+                // Combine main delay output with early reflections
+                outputLeft = combined_delay_left + earlyReflectionLeft;
+                outputRight = combined_delay_right + earlyReflectionRight;
                 
                 // After all processing, apply wet gain compensation and makeup gain
                 float wetLeft = lowPass * 10.0f;
