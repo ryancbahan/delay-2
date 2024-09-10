@@ -35,8 +35,6 @@ DelaytutorialAudioProcessor::DelaytutorialAudioProcessor()
     mCircularBufferLength = 0;
     mDelayReadHead_left = 0;
     mDelayReadHead_right = 0;
-    mFeedbackLeft = 0;
-    mFeedbackRight = 0;
     mDelayTimeSmooth = 0;
     mLfoPhase = 0;
     mLfoDepthSmooth = 0;
@@ -235,6 +233,14 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     const float densityBuildupRate = 0.99f; // Adjust this value to control build-up speed
     static float densityFactor = 0.0f;
 
+    // Feedback matrix
+    static const float feedbackMatrix[NUM_DELAY_LINES][NUM_DELAY_LINES] = {
+        {0.2f, 0.1f, 0.05f, 0.025f},
+        {0.1f, 0.3f, 0.15f, 0.075f},
+        {0.05f, 0.15f, 0.4f, 0.2f},
+        {0.025f, 0.075f, 0.2f, 0.5f}
+    };
+
     for (int sample = 0; sample < buffer.getNumSamples(); sample++)
     {
         // Apply DC blocking filter
@@ -247,8 +253,34 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
         lastOutputLeft = outputLeft;
         lastOutputRight = outputRight;
 
-        mCircularBufferLeft[mCircularBufferWriteHead] = outputLeft + mFeedbackLeft;
-        mCircularBufferRight[mCircularBufferWriteHead] = outputRight + mFeedbackRight;
+        // Prepare feedback using the matrix
+        float feedbackLeft[NUM_DELAY_LINES] = {0.0f};
+        float feedbackRight[NUM_DELAY_LINES] = {0.0f};
+
+        for (int i = 0; i < NUM_DELAY_LINES; ++i) {
+            for (int j = 0; j < NUM_DELAY_LINES; ++j) {
+                feedbackLeft[i] += mFeedbackLeft[j] * feedbackMatrix[i][j];
+                feedbackRight[i] += mFeedbackRight[j] * feedbackMatrix[i][j];
+            }
+        }
+
+        // Write to circular buffer with feedback
+        float summedFeedbackLeft = 0.0f;
+        float summedFeedbackRight = 0.0f;
+        for (int i = 0; i < NUM_DELAY_LINES; ++i) {
+            summedFeedbackLeft += feedbackLeft[i];
+            summedFeedbackRight += feedbackRight[i];
+        }
+        
+        // Balance feedback between channels
+        float maxFeedback = std::max(std::abs(summedFeedbackLeft), std::abs(summedFeedbackRight));
+        if (maxFeedback > 1.0f) {
+            summedFeedbackLeft /= maxFeedback;
+            summedFeedbackRight /= maxFeedback;
+        }
+        
+        mCircularBufferLeft[mCircularBufferWriteHead] = outputLeft + summedFeedbackLeft;
+        mCircularBufferRight[mCircularBufferWriteHead] = outputRight + summedFeedbackRight;
         
         // Smooth the stereo offset
         mStereoOffsetSmooth = mStereoOffsetSmooth * smoothCoeff + stereoOffset * (1.0f - smoothCoeff);
@@ -370,16 +402,26 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
         
         // Apply Harmonic Tremolo
         float tremLfo = 0.5f + 0.5f * sinf(2.0f * M_PI * tremPhase);
-        float lowPass = combined_delay_left * (1.0f - (tremDepth / mDelayFraction) * (tremLfo * 3)) + combined_delay_right * (tremDepth * tremLfo);
+        float lowPass = combined_delay_left * (1.0f - (tremDepth) * (tremLfo * 3)) + combined_delay_right * (tremDepth * tremLfo);
         float highPass = combined_delay_left * (tremDepth * tremLfo) + combined_delay_right * (1.0f - tremDepth * tremLfo);
 
-        float feedback = *mFeedbackParameter;
-        mFeedbackLeft = lowPass * feedback;
-        mFeedbackRight = highPass * feedback;
+        // Scale down the feedback
+        float feedback = *mFeedbackParameter * 0.5f; // Reduce feedback by half
+        for (int i = 0; i < NUM_DELAY_LINES; ++i) {
+            mFeedbackLeft[i] = lowPass * feedback;
+            mFeedbackRight[i] = highPass * feedback;
+        }
         
         float dryWet = *mDryWetParameter;
-        buffer.setSample(0, sample, inputLeft * (1 - dryWet) + lowPass * dryWet);
-        buffer.setSample(1, sample, inputRight * (1 - dryWet) + highPass * dryWet);
+        outputLeft = inputLeft * (1 - dryWet) + lowPass * dryWet;
+        outputRight = inputRight * (1 - dryWet) + highPass * dryWet;
+        
+        // Apply soft clipping to the output
+        outputLeft = std::tanh(outputLeft);
+        outputRight = std::tanh(outputRight);
+        
+        buffer.setSample(0, sample, outputLeft);
+        buffer.setSample(1, sample, outputRight);
         
         mCircularBufferWriteHead++;
         if (mCircularBufferWriteHead >= mCircularBufferLength) {
