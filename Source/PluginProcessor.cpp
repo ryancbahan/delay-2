@@ -261,11 +261,11 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
             uniqueLfoPhase_left = std::fmod(uniqueLfoPhase_left, 1.0f);
             uniqueLfoPhase_right = std::fmod(uniqueLfoPhase_right, 1.0f);
             
-            float lfoOut_left = (1.0f - std::cos(2.0f * M_PI * uniqueLfoPhase_left)) * 0.5f;
-            float lfoOut_right = (1.0f - std::cos(2.0f * M_PI * uniqueLfoPhase_right)) * 0.5f;
+            float lfoOut_left = (1.0f - std::cos(2.0f * M_PI * uniqueLfoPhase_left)) * 0.0725f;
+            float lfoOut_right = (1.0f - std::cos(2.0f * M_PI * uniqueLfoPhase_right)) * 0.0725f;
             
-            float lfoModulation_left = lfoOut_left * *mLfoDepthParameter;
-            float lfoModulation_right = lfoOut_right * *mLfoDepthParameter;
+            float lfoModulation_left = lfoOut_left * (*mLfoDepthParameter / 3);
+            float lfoModulation_right = lfoOut_right * (*mLfoDepthParameter / 3);
             
             float targetDelayTimeInSamples_left = baseDelayTimeInSamples * delayMultiplier * (1.0f + lfoModulation_left);
             float targetDelayTimeInSamples_right = baseDelayTimeInSamples * delayMultiplier * (1.0f + lfoModulation_right);
@@ -338,14 +338,14 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
         combined_delay_left = std::tanh(combined_delay_left);
         combined_delay_right = std::tanh(combined_delay_right);
         
-        const float tremRate = 5.0f; // 5 Hz
-        const float tremDepth = 1.0f; // 50% depth
+        const float tremRate = 2.0f; // 2 Hz
+        const float tremDepth = 0.5f; // 50% depth
         static float tremPhase = 0.0f;
         const float tremPhaseInc = tremRate / getSampleRate();
         
         // Apply Harmonic Tremolo
         float tremLfo = 0.5f + 0.5f * sinf(2.0f * M_PI * tremPhase);
-        float lowPass = combined_delay_left * (1.0f - (tremDepth / mDelayFraction) * tremLfo) + combined_delay_right * (tremDepth * tremLfo);
+        float lowPass = combined_delay_left * (1.0f - (tremDepth / mDelayFraction) * (tremLfo * 3)) + combined_delay_right * (tremDepth * tremLfo);
         float highPass = combined_delay_left * (tremDepth * tremLfo) + combined_delay_right * (1.0f - tremDepth * tremLfo);
 
         float feedback = *mFeedbackParameter;
