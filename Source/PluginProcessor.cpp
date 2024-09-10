@@ -396,7 +396,7 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
         combined_delay_right = std::tanh(combined_delay_right);
         
         const float tremRate = 2.0f; // 2 Hz
-        const float tremDepth = 0.5f; // 50% depth
+        const float tremDepth = 0.35f; //
         static float tremPhase = 0.0f;
         const float tremPhaseInc = tremRate / getSampleRate();
         
