@@ -255,7 +255,7 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
 
     // Prime-based waveshaping amounts
     const float primes[NUM_DELAY_LINES] = {2.0f, 3.0f, 5.0f, 7.0f};
-    const float baseWaveshapeAmount = 1.0f;
+    const float baseWaveshapeAmount = 5.0f;
 
     // DC blocking filter
     float dcBlockCoeff = 0.995f;
@@ -312,7 +312,17 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
 
         for (int i = 0; i < NUM_DELAY_LINES; ++i)
         {
-            float delayMultiplier = std::pow(mDelayFraction, i);
+            // Define prime numbers for irregular delay multipliers
+            const float delayPrimes[NUM_DELAY_LINES] = {2.0f, 3.0f, 5.0f, 7.0f};
+
+            // In the class definition, add a new member variable:
+            float mIrregularDelayFactor;
+
+            // In the constructor or prepareToPlay, initialize this factor:
+            mIrregularDelayFactor = 0.2f; // Adjust this value to control the irregularity
+
+            // In the processBlock function, replace the original delay multiplier line with:
+            float delayMultiplier = 1.0f + (delayPrimes[i] / 7.0f - 1.0f) * mIrregularDelayFactor;
             float weight = 1.0f / (i + 1);  // Decreasing weight for each delay line
 
             // Unique LFO phase for each delay line
