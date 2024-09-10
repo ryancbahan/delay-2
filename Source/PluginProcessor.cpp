@@ -203,6 +203,8 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     juce::ScopedNoDenormals noDenormals;
     auto totalNumInputChannels  = getTotalNumInputChannels();
     auto totalNumOutputChannels = getTotalNumOutputChannels();
+    
+    const float inputGainCompensation = 0.15f;  // Reduce input by 75%
 
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
@@ -267,8 +269,8 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
         // Apply DC blocking filter
         float inputLeft = leftChannel[sample];
         float inputRight = rightChannel[sample];
-        float outputLeft = inputLeft - lastInputLeft + R * lastOutputLeft;
-        float outputRight = inputRight - lastInputRight + R * lastOutputRight;
+        float outputLeft = inputLeft - lastInputLeft + R * lastOutputLeft * inputGainCompensation;
+        float outputRight = inputRight - lastInputRight + R * lastOutputRight * inputGainCompensation;
         lastInputLeft = inputLeft;
         lastInputRight = inputRight;
         lastOutputLeft = outputLeft;
@@ -479,13 +481,18 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
                     mFeedbackRight[i] = highPass * feedback;
                 }
                 
+                // After all processing, apply wet gain compensation and makeup gain
+                float wetLeft = lowPass * 10.0f;
+                float wetRight = highPass * 10.0f;
+
+                // Final output stage
                 float dryWet = *mDryWetParameter;
-                 outputLeft = inputLeft * (1 - dryWet) + lowPass * dryWet;
-                 outputRight = inputRight * (1 - dryWet) + highPass * dryWet;
+                outputLeft = inputLeft * (1 - dryWet) + wetLeft * dryWet;
+                outputRight = inputRight * (1 - dryWet) + wetRight * dryWet;
                 
                 // Apply soft clipping to the output
-                outputLeft = std::tanh(outputLeft);
-                outputRight = std::tanh(outputRight);
+//                outputLeft = std::tanh(outputLeft);
+//                outputRight = std::tanh(outputRight);
                 
                 buffer.setSample(0, sample, outputLeft);
                 buffer.setSample(1, sample, outputRight);
