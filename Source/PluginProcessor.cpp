@@ -223,8 +223,8 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
 
     // Early reflections setup
     const int numReflections = 8;
-    float reflectionDelays[numReflections] = {0.005f, 0.010f, 0.015f, 0.020f, 0.025f, 0.030f, 0.035f, 0.040f}; // in seconds
-    float reflectionGains[numReflections] = {0.8f, 0.7f, 0.6f, 0.5f, 0.4f, 0.3f, 0.2f, 0.1f};
+    float reflectionDelays[numReflections] = {0.05f, 0.10f, 0.15f, 0.20f, 0.25f, 0.30f, 0.35f, 0.40f}; // in seconds
+    float reflectionGains[numReflections] = {0.6f, 0.5f, 0.4f, 0.3f, 0.2f, 0.1f, 0.05f, 0.025f};
 
     // Convert reflection delays to samples
     int reflectionDelaySamples[numReflections];
@@ -266,10 +266,10 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
 
     // Prime-based waveshaping amounts
     const float primes[NUM_DELAY_LINES] = {2.0f, 3.0f, 5.0f, 7.0f};
-    const float baseWaveshapeAmount = 5.0f;
+    const float baseWaveshapeAmount = 3.0f;
 
     // Density envelope
-    static float densityEnvelope = 0.0f;
+    static float densityEnvelope = 1.0f;
     const float densityAttackRate = 0.999995f; // Much slower buildup
     const float maxDensity = 0.7f; // Limit maximum density
 
