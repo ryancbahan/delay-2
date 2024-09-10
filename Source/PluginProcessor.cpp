@@ -241,6 +241,27 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
         {0.025f, 0.075f, 0.2f, 0.5f}
     };
 
+    // Waveshaping function
+    auto softClip = [](float x, float amount) {
+        float absX = std::abs(x);
+        if (absX <= 1.0f / 3.0f) {
+            return 2.0f * x;
+        } else if (absX <= 2.0f / 3.0f) {
+            return x * (3.0f - powf(2.0f - 3.0f * absX, 2.0f)) / 3.0f;
+        } else {
+            return ((x > 0.0f) ? 1.0f : -1.0f);
+        }
+    };
+
+    // Prime-based waveshaping amounts
+    const float primes[NUM_DELAY_LINES] = {2.0f, 3.0f, 5.0f, 7.0f};
+    const float baseWaveshapeAmount = 1.0f;
+
+    // DC blocking filter
+    float dcBlockCoeff = 0.995f;
+    static float dcBlockerStateLeft = 0.0f;
+    static float dcBlockerStateRight = 0.0f;
+
     for (int sample = 0; sample < buffer.getNumSamples(); sample++)
     {
         // Apply DC blocking filter
@@ -361,8 +382,34 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
             int readHead_x1_right = (readHead_x_right + 1) % mCircularBufferLength;
             float readHeadFloat_right = mDelayReadHead_right - readHead_x_right;
 
-            float delay_sample_left = lin_interp(mCircularBufferLeft[readHead_x_left], mCircularBufferLeft[readHead_x1_left], readHeadFloat_left);
-            float delay_sample_right = lin_interp(mCircularBufferRight[readHead_x_right], mCircularBufferRight[readHead_x1_right], readHeadFloat_right);
+            // Implement crossfade for buffer wraparound
+            float delay_sample_left, delay_sample_right;
+            if (readHead_x1_left < readHead_x_left) {
+                float fade = (float)readHead_x1_left / mCircularBufferLength;
+                delay_sample_left = lin_interp(mCircularBufferLeft[readHead_x_left], mCircularBufferLeft[0], fade);
+            } else {
+                delay_sample_left = lin_interp(mCircularBufferLeft[readHead_x_left], mCircularBufferLeft[readHead_x1_left], readHeadFloat_left);
+            }
+
+            if (readHead_x1_right < readHead_x_right) {
+                float fade = (float)readHead_x1_right / mCircularBufferLength;
+                delay_sample_right = lin_interp(mCircularBufferRight[readHead_x_right], mCircularBufferRight[0], fade);
+            } else {
+                delay_sample_right = lin_interp(mCircularBufferRight[readHead_x_right], mCircularBufferRight[readHead_x1_right], readHeadFloat_right);
+            }
+
+            // Apply prime-based waveshaping with smoother transition
+            float waveshapeAmount = baseWaveshapeAmount * primes[i] / 7.0f; // Normalize by the largest prime
+            delay_sample_left = softClip(delay_sample_left, waveshapeAmount);
+            delay_sample_right = softClip(delay_sample_right, waveshapeAmount);
+            
+            float compensationFactor = 0.5f; // Adjust this value to control overall volume
+            delay_sample_left *= compensationFactor;
+            delay_sample_right *= compensationFactor;
+
+            // After combining delay lines, add an extra saturation stage with volume compensation
+            combined_delay_left = softClip(combined_delay_left * 2.0f, 1.0f) * 0.5f * compensationFactor;
+            combined_delay_right = softClip(combined_delay_right * 2.0f, 1.0f) * 0.5f * compensationFactor;
 
             // Apply all-pass diffusion
             for (int j = 0; j < 4; ++j) {
@@ -391,52 +438,64 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
         combined_delay_left *= densityFactor;
         combined_delay_right *= densityFactor;
 
+        // Apply DC blocking filter
+        float dcBlockedLeft = combined_delay_left - dcBlockerStateLeft + dcBlockCoeff * dcBlockerStateLeft;
+        dcBlockerStateLeft = dcBlockedLeft;
+        float dcBlockedRight = combined_delay_right - dcBlockerStateRight + dcBlockCoeff * dcBlockerStateRight;
+        dcBlockerStateRight = dcBlockedRight;
+
+        combined_delay_left = dcBlockedLeft;
+        combined_delay_right = dcBlockedRight;
+
         // Soft clipping to prevent overloads
         combined_delay_left = std::tanh(combined_delay_left);
         combined_delay_right = std::tanh(combined_delay_right);
         
         const float tremRate = 2.0f; // 2 Hz
-        const float tremDepth = 0.35f; //
+        const float tremDepth = 0.5f; // 50% depth
         static float tremPhase = 0.0f;
         const float tremPhaseInc = tremRate / getSampleRate();
         
         // Apply Harmonic Tremolo
-        float tremLfo = 0.5f + 0.5f * sinf(2.0f * M_PI * tremPhase);
-        float lowPass = combined_delay_left * (1.0f - (tremDepth) * (tremLfo * 3)) + combined_delay_right * (tremDepth * tremLfo);
+               float tremLfo = 0.5f + 0.5f * sinf(2.0f * M_PI * tremPhase);
+               float lowPass = combined_delay_left * (1.0f - (tremDepth / mDelayFraction) * (tremLfo * 3)) + combined_delay_right * (tremDepth * tremLfo);
+        
         float highPass = combined_delay_left * (tremDepth * tremLfo) + combined_delay_right * (1.0f - tremDepth * tremLfo);
 
-        // Scale down the feedback
-        float feedback = *mFeedbackParameter * 0.5f; // Reduce feedback by half
-        for (int i = 0; i < NUM_DELAY_LINES; ++i) {
-            mFeedbackLeft[i] = lowPass * feedback;
-            mFeedbackRight[i] = highPass * feedback;
-        }
-        
-        float dryWet = *mDryWetParameter;
-        outputLeft = inputLeft * (1 - dryWet) + lowPass * dryWet;
-        outputRight = inputRight * (1 - dryWet) + highPass * dryWet;
-        
-        // Apply soft clipping to the output
-        outputLeft = std::tanh(outputLeft);
-        outputRight = std::tanh(outputRight);
-        
-        buffer.setSample(0, sample, outputLeft);
-        buffer.setSample(1, sample, outputRight);
-        
-        mCircularBufferWriteHead++;
-        if (mCircularBufferWriteHead >= mCircularBufferLength) {
-            mCircularBufferWriteHead = 0;
-        }
-    
-        // Update tremolo phase
-        tremPhase += tremPhaseInc;
-        if (tremPhase >= 1.0f) tremPhase -= 1.0f;
+                // Scale down the feedback
+                float feedback = *mFeedbackParameter * 0.5f; // Reduce feedback by half
+                for (int i = 0; i < NUM_DELAY_LINES; ++i) {
+                    mFeedbackLeft[i] = lowPass * feedback;
+                    mFeedbackRight[i] = highPass * feedback;
+                }
+                
+                float dryWet = *mDryWetParameter;
+                 outputLeft = inputLeft * (1 - dryWet) + lowPass * dryWet;
+                 outputRight = inputRight * (1 - dryWet) + highPass * dryWet;
+                
+                // Apply soft clipping to the output
+                outputLeft = std::tanh(outputLeft);
+                outputRight = std::tanh(outputRight);
+                
+                buffer.setSample(0, sample, outputLeft);
+                buffer.setSample(1, sample, outputRight);
+                
+                // Smoother transition for circular buffer write head
+                mCircularBufferWriteHead++;
+                if (mCircularBufferWriteHead >= mCircularBufferLength) {
+                    mCircularBufferWriteHead = 0;
+                    // Implement a short crossfade here if needed
+                }
+            
+                // Update tremolo phase
+                tremPhase += tremPhaseInc;
+                if (tremPhase >= 1.0f) tremPhase -= 1.0f;
 
-        // Update the main LFO phase
-        mLfoPhase += *mLfoRateParameter / getSampleRate();
-        mLfoPhase = std::fmod(mLfoPhase, 1.0f);
-    }
-}
+                // Update the main LFO phase
+                mLfoPhase += *mLfoRateParameter / getSampleRate();
+                mLfoPhase = std::fmod(mLfoPhase, 1.0f);
+            }
+        }
 
 //==============================================================================
 bool DelaytutorialAudioProcessor::hasEditor() const
