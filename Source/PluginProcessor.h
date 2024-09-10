@@ -91,6 +91,7 @@ private:
     float mFeedbackLeft[NUM_DELAY_LINES];
     float mFeedbackRight[NUM_DELAY_LINES];
     float mIrregularDelayFactor = 0.2f;
+    float densityEnvelope;
     
     float mFilterStatesLeft[8] = {0};
     float mFilterStatesRight[8] = {0};

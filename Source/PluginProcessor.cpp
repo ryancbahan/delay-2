@@ -138,6 +138,7 @@ void DelaytutorialAudioProcessor::prepareToPlay (double sampleRate, int samplesP
     mLfoDepthSmooth = 0;
     mStereoOffsetSmooth = 0;
     mDelayFraction = 0.66f;
+    densityEnvelope = 0.0f;
 
     
     mCircularBufferWriteHead = 0;
@@ -234,7 +235,7 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     // Low-pass filter coefficients
     float filterCoeffs[numReflections];
     for (int i = 0; i < numReflections; ++i) {
-        float cutoff = 20000.0f * std::pow(0.75f, i); // Exponentially decreasing cutoff frequency
+        float cutoff = 20000.0f * std::pow(0.95f, i); // Exponentially decreasing cutoff frequency
         float w0 = 2.0f * M_PI * cutoff / getSampleRate();
         filterCoeffs[i] = std::exp(-w0);
     }
@@ -267,6 +268,14 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     const float primes[NUM_DELAY_LINES] = {2.0f, 3.0f, 5.0f, 7.0f};
     const float baseWaveshapeAmount = 5.0f;
 
+    // Density envelope
+    static float densityEnvelope = 0.0f;
+    const float densityAttackRate = 0.999995f; // Much slower buildup
+    const float maxDensity = 0.7f; // Limit maximum density
+
+    // Predelay for early reflections
+    const int predelaySamples = static_cast<int>(0.02f * getSampleRate()); // 20ms predelay
+
     for (int sample = 0; sample < buffer.getNumSamples(); sample++)
     {
         // Apply DC blocking filter
@@ -283,19 +292,21 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
         mCircularBufferLeft[mCircularBufferWriteHead] = outputLeft;
         mCircularBufferRight[mCircularBufferWriteHead] = outputRight;
 
-        // Calculate early reflections with low-pass filtering
+        // Calculate early reflections with low-pass filtering, density envelope, and predelay
         float earlyReflectionLeft = 0.0f;
         float earlyReflectionRight = 0.0f;
         for (int i = 0; i < numReflections; ++i)
         {
-            int readIndex = (mCircularBufferWriteHead - reflectionDelaySamples[i] + mCircularBufferLength) % mCircularBufferLength;
+            int readIndex = (mCircularBufferWriteHead - reflectionDelaySamples[i] - predelaySamples + mCircularBufferLength) % mCircularBufferLength;
 
             // Apply low-pass filter
             mFilterStatesLeft[i] = filterCoeffs[i] * mFilterStatesLeft[i] + (1.0f - filterCoeffs[i]) * mCircularBufferLeft[readIndex];
             mFilterStatesRight[i] = filterCoeffs[i] * mFilterStatesRight[i] + (1.0f - filterCoeffs[i]) * mCircularBufferRight[readIndex];
 
-            earlyReflectionLeft += mFilterStatesLeft[i] * reflectionGains[i];
-            earlyReflectionRight += mFilterStatesRight[i] * reflectionGains[i];
+            // Apply density envelope to early reflections (with reduced initial gain)
+            float reflectionGain = reflectionGains[i] * densityEnvelope * 0.2f; // Reduced initial gain
+            earlyReflectionLeft += mFilterStatesLeft[i] * reflectionGain;
+            earlyReflectionRight += mFilterStatesRight[i] * reflectionGain;
         }
 
         // Main delay line processing
@@ -307,6 +318,10 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
                 summedFeedbackRight += mFeedbackRight[j] * feedbackMatrix[i][j];
             }
         }
+        
+        // Apply density envelope to feedback
+        summedFeedbackLeft *= densityEnvelope;
+        summedFeedbackRight *= densityEnvelope;
         
         // Balance feedback between channels
         float maxFeedback = std::max(std::abs(summedFeedbackLeft), std::abs(summedFeedbackRight));
@@ -384,13 +399,17 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
             delay_sample_left *= compensationFactor;
             delay_sample_right *= compensationFactor;
 
+            // Apply density envelope to delay lines
+            delay_sample_left *= densityEnvelope;
+            delay_sample_right *= densityEnvelope;
+
             combined_delay_left += delay_sample_left * weight;
             combined_delay_right += delay_sample_right * weight;
             total_weight += weight;
 
-            // Update feedback for next iteration
-            mFeedbackLeft[i] = delay_sample_left * (*mFeedbackParameter);
-            mFeedbackRight[i] = delay_sample_right * (*mFeedbackParameter);
+            // Update feedback for next iteration (with reduced initial feedback)
+            mFeedbackLeft[i] = delay_sample_left * (*mFeedbackParameter) * densityEnvelope;
+            mFeedbackRight[i] = delay_sample_right * (*mFeedbackParameter) * densityEnvelope;
         }
 
         // Normalize the combined delay
@@ -407,21 +426,24 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
         outputLeft = std::tanh(outputLeft);
         outputRight = std::tanh(outputRight);
         
-        // Mix dry and wet signals
-        float dryWet = *mDryWetParameter;
+        // Mix dry and wet signals with gradual wet increase
+        float dryWet = *mDryWetParameter * densityEnvelope;
         outputLeft = inputLeft * (1 - dryWet) + outputLeft * dryWet;
         outputRight = inputRight * (1 - dryWet) + outputRight * dryWet;
-
-        buffer.setSample(0, sample, outputLeft);
-        buffer.setSample(1, sample, outputRight);
         
-        // Update circular buffer write head
-        mCircularBufferWriteHead = (mCircularBufferWriteHead + 1) % mCircularBufferLength;
+        buffer.setSample(0, sample, outputLeft);
+                buffer.setSample(1, sample, outputRight);
+                
+                // Update circular buffer write head
+                mCircularBufferWriteHead = (mCircularBufferWriteHead + 1) % mCircularBufferLength;
 
-        // Update LFO phase
-        mLfoPhase = std::fmod(mLfoPhase + *mLfoRateParameter / getSampleRate(), 1.0f);
-    }
-}
+                // Update LFO phase
+                mLfoPhase = std::fmod(mLfoPhase + *mLfoRateParameter / getSampleRate(), 1.0f);
+
+                // Update density envelope with a maximum limit
+                densityEnvelope = std::min(maxDensity, 1.0f - (1.0f - densityEnvelope) * densityAttackRate);
+            }
+        }
 
 //==============================================================================
 bool DelaytutorialAudioProcessor::hasEditor() const
