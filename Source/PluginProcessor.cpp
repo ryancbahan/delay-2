@@ -261,11 +261,11 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
             uniqueLfoPhase_left = std::fmod(uniqueLfoPhase_left, 1.0f);
             uniqueLfoPhase_right = std::fmod(uniqueLfoPhase_right, 1.0f);
             
-            float lfoOut_left = (1.0f - std::cos(2.0f * M_PI * uniqueLfoPhase_left)) * 0.5f;
-            float lfoOut_right = (1.0f - std::cos(2.0f * M_PI * uniqueLfoPhase_right)) * 0.5f;
+            float lfoOut_left = (1.0f - std::cos(2.0f * M_PI * uniqueLfoPhase_left)) * 0.0725f;
+            float lfoOut_right = (1.0f - std::cos(2.0f * M_PI * uniqueLfoPhase_right)) * 0.0725f;
             
-            float lfoModulation_left = lfoOut_left * *mLfoDepthParameter;
-            float lfoModulation_right = lfoOut_right * *mLfoDepthParameter;
+            float lfoModulation_left = lfoOut_left * (*mLfoDepthParameter / 3);
+            float lfoModulation_right = lfoOut_right * (*mLfoDepthParameter / 3);
             
             float targetDelayTimeInSamples_left = baseDelayTimeInSamples * delayMultiplier * (1.0f + lfoModulation_left);
             float targetDelayTimeInSamples_right = baseDelayTimeInSamples * delayMultiplier * (1.0f + lfoModulation_right);
