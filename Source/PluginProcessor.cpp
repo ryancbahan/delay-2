@@ -226,6 +226,15 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     const float R = 0.995f;
     static float lastInputLeft = 0.0f, lastInputRight = 0.0f, lastOutputLeft = 0.0f, lastOutputRight = 0.0f;
 
+    // All-pass filter coefficients (for diffusion)
+    const float allpassCoeff = 0.7f;
+    static float allpassBufferLeft[NUM_DELAY_LINES][4] = {{0.0f}};
+    static float allpassBufferRight[NUM_DELAY_LINES][4] = {{0.0f}};
+
+    // Density build-up parameters
+    const float densityBuildupRate = 0.99f; // Adjust this value to control build-up speed
+    static float densityFactor = 0.0f;
+
     for (int sample = 0; sample < buffer.getNumSamples(); sample++)
     {
         // Apply DC blocking filter
@@ -323,6 +332,17 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
             float delay_sample_left = lin_interp(mCircularBufferLeft[readHead_x_left], mCircularBufferLeft[readHead_x1_left], readHeadFloat_left);
             float delay_sample_right = lin_interp(mCircularBufferRight[readHead_x_right], mCircularBufferRight[readHead_x1_right], readHeadFloat_right);
 
+            // Apply all-pass diffusion
+            for (int j = 0; j < 4; ++j) {
+                float allpass_out_left = allpassCoeff * (delay_sample_left - allpassBufferLeft[i][j]) + allpassBufferLeft[i][j];
+                allpassBufferLeft[i][j] = delay_sample_left;
+                delay_sample_left = allpass_out_left;
+
+                float allpass_out_right = allpassCoeff * (delay_sample_right - allpassBufferRight[i][j]) + allpassBufferRight[i][j];
+                allpassBufferRight[i][j] = delay_sample_right;
+                delay_sample_right = allpass_out_right;
+            }
+
             combined_delay_left += delay_sample_left * weight;
             combined_delay_right += delay_sample_right * weight;
             total_weight += weight;
@@ -333,6 +353,11 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
             combined_delay_left /= total_weight;
             combined_delay_right /= total_weight;
         }
+
+        // Apply density build-up
+        densityFactor = densityFactor * densityBuildupRate + (1.0f - densityBuildupRate);
+        combined_delay_left *= densityFactor;
+        combined_delay_right *= densityFactor;
 
         // Soft clipping to prevent overloads
         combined_delay_left = std::tanh(combined_delay_left);
@@ -361,8 +386,6 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
             mCircularBufferWriteHead = 0;
         }
     
-
-
         // Update tremolo phase
         tremPhase += tremPhaseInc;
         if (tremPhase >= 1.0f) tremPhase -= 1.0f;
