@@ -144,6 +144,27 @@ DelaytutorialAudioProcessorEditor::DelaytutorialAudioProcessorEditor (Delaytutor
     mLfoPhaseSlider.onDragEnd = [lfoPhaseParameter] {
         lfoPhaseParameter->endChangeGesture();
     };
+    
+    juce::AudioParameterInt* delayLinesParameter = (juce::AudioParameterInt*)params.getUnchecked(6);
+
+    mDelayLinesSlider.setBounds(300, 100, 100, 100);
+    mDelayLinesSlider.setSliderStyle(juce::Slider::SliderStyle::RotaryVerticalDrag);
+    mDelayLinesSlider.setTextBoxStyle(juce::Slider::TextEntryBoxPosition::NoTextBox, true, 0, 0);
+    mDelayLinesSlider.setRange(delayLinesParameter->getRange().getStart(), delayLinesParameter->getRange().getEnd());
+    mDelayLinesSlider.setValue(*delayLinesParameter);
+    addAndMakeVisible(mDelayLinesSlider);
+    
+    mDelayLinesSlider.onValueChange = [this, delayLinesParameter] {
+        *delayLinesParameter = mDelayLinesSlider.getValue();
+    };
+    
+    mDelayLinesSlider.onDragStart = [delayLinesParameter] {
+        delayLinesParameter->beginChangeGesture();
+    };
+    
+    mDelayLinesSlider.onDragEnd = [delayLinesParameter] {
+        delayLinesParameter->endChangeGesture();
+    };
 }
 
 DelaytutorialAudioProcessorEditor::~DelaytutorialAudioProcessorEditor()
