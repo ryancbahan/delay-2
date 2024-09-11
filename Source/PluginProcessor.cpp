@@ -29,6 +29,8 @@ DelaytutorialAudioProcessor::DelaytutorialAudioProcessor()
     addParameter(mLfoRateParameter = new juce::AudioParameterFloat("lforate", "LFO rate",  0.1f, 20.f, 01.f));
     addParameter(mLfoDepthParameter = new juce::AudioParameterFloat("lfodepth", "LFO depth",  0.0f, 0.1f, 0.05f));
     addParameter(mLfoPhaseParameter = new juce::AudioParameterFloat("lfophase", "LFO phase",  0.0f, 1.f, 0.f));
+    addParameter(mNumDelayLinesParameter = new juce::AudioParameterInt("numdelaylines", "Delay lines",  1, 25, 4));
+
     
     mCircularBufferLeft = nullptr;
     mCircularBufferRight = nullptr;
@@ -42,10 +44,14 @@ DelaytutorialAudioProcessor::DelaytutorialAudioProcessor()
     mStereoOffsetSmooth = 0;
     mDelayFraction = 0.66f;
     
-    for (int i = 0; i < NUM_DELAY_LINES; ++i)
+    for (int i = 0; i < MAX_DELAY_LINES; ++i)
     {
         mDelayTimeInSamples_left[i] = 0.0f;
         mDelayTimeInSamples_right[i] = 0.0f;
+        mFeedbackLeft[i] = 0.0f;
+        mFeedbackRight[i] = 0.0f;
+        mFilterStatesLeft[i] = 0.0f;
+        mFilterStatesRight[i] = 0.0f;
     }
 
 }
@@ -128,10 +134,10 @@ void DelaytutorialAudioProcessor::changeProgramName (int index, const juce::Stri
 //==============================================================================
 void DelaytutorialAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    for (int i = 0; i < NUM_DELAY_LINES; ++i)
+    for (int i = 0; i < MAX_DELAY_LINES; ++i)
     {
-        mDelayTimeInSamples_left[i] = 0.0f;
-        mDelayTimeInSamples_right[i] = 0.0f;
+        mDelayTimeInSamples_left[i] = sampleRate * mDelayTimeParameter->get() * (1.0f + 0.1f * i);
+        mDelayTimeInSamples_right[i] = sampleRate * mDelayTimeParameter->get() * (1.0f + 0.1f * i);
     }
     mDelayReadHead_left = 0;
     mDelayReadHead_right = 0;
@@ -205,6 +211,8 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     auto totalNumInputChannels  = getTotalNumInputChannels();
     auto totalNumOutputChannels = getTotalNumOutputChannels();
     
+    int num_delay_lines = mNumDelayLinesParameter->get();
+    
     const float inputGainCompensation = 0.15f;  // Reduce input by 75%
 
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
@@ -229,19 +237,35 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
 
     // All-pass filter coefficients (for diffusion)
     const float allpassCoeff = 0.7f;
-    static float allpassBufferLeft[NUM_DELAY_LINES][4] = {{0.0f}};
-    static float allpassBufferRight[NUM_DELAY_LINES][4] = {{0.0f}};
+    float allpassBufferLeft[MAX_DELAY_LINES][4] = {{0.0f}};
+    float allpassBufferRight[MAX_DELAY_LINES][4] = {{0.0f}};
 
     // Density build-up parameters
     const float densityBuildupRate = 0.99f; // Adjust this value to control build-up speed
     static float densityFactor = 0.0f;
 
     // Feedback matrix
-    static const float feedbackMatrix[NUM_DELAY_LINES][NUM_DELAY_LINES] = {
-        {0.2f, 0.1f, 0.05f, 0.025f},
-        {0.1f, 0.3f, 0.15f, 0.075f},
-        {0.05f, 0.15f, 0.4f, 0.2f},
-        {0.025f, 0.075f, 0.2f, 0.5f}
+    const float feedbackMatrix[MAX_DELAY_LINES][MAX_DELAY_LINES] = {
+        {0.50f, 0.25f, 0.125f, 0.0625f, 0.03125f, 0.015625f, 0.0078125f, 0.00390625f, 0.001953125f, 0.0009765625f, 0.00048828125f, 0.000244140625f, 0.0001220703125f, 0.00006103515625f, 0.000030517578125f, 0.0000152587890625f, 0.00000762939453125f, 0.000003814697265625f, 0.0000019073486328125f, 0.00000095367431640625f},
+        {0.25f, 0.50f, 0.25f, 0.125f, 0.0625f, 0.03125f, 0.015625f, 0.0078125f, 0.00390625f, 0.001953125f, 0.0009765625f, 0.00048828125f, 0.000244140625f, 0.0001220703125f, 0.00006103515625f, 0.000030517578125f, 0.0000152587890625f, 0.00000762939453125f, 0.000003814697265625f, 0.0000019073486328125f},
+        {0.125f, 0.25f, 0.50f, 0.25f, 0.125f, 0.0625f, 0.03125f, 0.015625f, 0.0078125f, 0.00390625f, 0.001953125f, 0.0009765625f, 0.00048828125f, 0.000244140625f, 0.0001220703125f, 0.00006103515625f, 0.000030517578125f, 0.0000152587890625f, 0.00000762939453125f, 0.000003814697265625f},
+        {0.0625f, 0.125f, 0.25f, 0.50f, 0.25f, 0.125f, 0.0625f, 0.03125f, 0.015625f, 0.0078125f, 0.00390625f, 0.001953125f, 0.0009765625f, 0.00048828125f, 0.000244140625f, 0.0001220703125f, 0.00006103515625f, 0.000030517578125f, 0.0000152587890625f, 0.00000762939453125f},
+        {0.03125f, 0.0625f, 0.125f, 0.25f, 0.50f, 0.25f, 0.125f, 0.0625f, 0.03125f, 0.015625f, 0.0078125f, 0.00390625f, 0.001953125f, 0.0009765625f, 0.00048828125f, 0.000244140625f, 0.0001220703125f, 0.00006103515625f, 0.000030517578125f, 0.0000152587890625f},
+        {0.015625f, 0.03125f, 0.0625f, 0.125f, 0.25f, 0.50f, 0.25f, 0.125f, 0.0625f, 0.03125f, 0.015625f, 0.0078125f, 0.00390625f, 0.001953125f, 0.0009765625f, 0.00048828125f, 0.000244140625f, 0.0001220703125f, 0.00006103515625f, 0.000030517578125f},
+        {0.0078125f, 0.015625f, 0.03125f, 0.0625f, 0.125f, 0.25f, 0.50f, 0.25f, 0.125f, 0.0625f, 0.03125f, 0.015625f, 0.0078125f, 0.00390625f, 0.001953125f, 0.0009765625f, 0.00048828125f, 0.000244140625f, 0.0001220703125f, 0.00006103515625f},
+        {0.00390625f, 0.0078125f, 0.015625f, 0.03125f, 0.0625f, 0.125f, 0.25f, 0.50f, 0.25f, 0.125f, 0.0625f, 0.03125f, 0.015625f, 0.0078125f, 0.00390625f, 0.001953125f, 0.0009765625f, 0.00048828125f, 0.000244140625f, 0.0001220703125f},
+        {0.001953125f, 0.00390625f, 0.0078125f, 0.015625f, 0.03125f, 0.0625f, 0.125f, 0.25f, 0.50f, 0.25f, 0.125f, 0.0625f, 0.03125f, 0.015625f, 0.0078125f, 0.00390625f, 0.001953125f, 0.0009765625f, 0.00048828125f, 0.000244140625f},
+        {0.0009765625f, 0.001953125f, 0.00390625f, 0.0078125f, 0.015625f, 0.03125f, 0.0625f, 0.125f, 0.25f, 0.50f, 0.25f, 0.125f, 0.0625f, 0.03125f, 0.015625f, 0.0078125f, 0.00390625f, 0.001953125f, 0.0009765625f, 0.00048828125f},
+        {0.00048828125f, 0.0009765625f, 0.001953125f, 0.00390625f, 0.0078125f, 0.015625f, 0.03125f, 0.0625f, 0.125f, 0.25f, 0.50f, 0.25f, 0.125f, 0.0625f, 0.03125f, 0.015625f, 0.0078125f, 0.00390625f, 0.001953125f, 0.0009765625f},
+        {0.000244140625f, 0.00048828125f, 0.0009765625f, 0.001953125f, 0.00390625f, 0.0078125f, 0.015625f, 0.03125f, 0.0625f, 0.125f, 0.25f, 0.50f, 0.25f, 0.125f, 0.0625f, 0.03125f, 0.015625f, 0.0078125f, 0.00390625f, 0.001953125f},
+        {0.0001220703125f, 0.000244140625f, 0.00048828125f, 0.0009765625f, 0.001953125f, 0.00390625f, 0.0078125f, 0.015625f, 0.03125f, 0.0625f, 0.125f, 0.25f, 0.50f, 0.25f, 0.125f, 0.0625f, 0.03125f, 0.015625f, 0.0078125f, 0.00390625f},
+        {0.00006103515625f, 0.0001220703125f, 0.000244140625f, 0.00048828125f, 0.0009765625f, 0.001953125f, 0.00390625f, 0.0078125f, 0.015625f, 0.03125f, 0.0625f, 0.125f, 0.25f, 0.50f, 0.25f, 0.125f, 0.0625f, 0.03125f, 0.015625f, 0.0078125f},
+        {0.000030517578125f, 0.00006103515625f, 0.0001220703125f, 0.000244140625f, 0.00048828125f, 0.0009765625f, 0.001953125f, 0.00390625f, 0.0078125f, 0.015625f, 0.03125f, 0.0625f, 0.125f, 0.25f, 0.50f, 0.25f, 0.125f, 0.0625f, 0.03125f, 0.015625f},
+        {0.0000152587890625f, 0.000030517578125f, 0.00006103515625f, 0.0001220703125f, 0.000244140625f, 0.00048828125f, 0.0009765625f, 0.001953125f, 0.00390625f, 0.0078125f, 0.015625f, 0.03125f, 0.0625f, 0.125f, 0.25f, 0.50f, 0.25f, 0.125f, 0.0625f, 0.03125f},
+        {0.00000762939453125f, 0.0000152587890625f, 0.000030517578125f, 0.00006103515625f, 0.0001220703125f, 0.000244140625f, 0.00048828125f, 0.0009765625f, 0.001953125f, 0.00390625f, 0.0078125f, 0.015625f, 0.03125f, 0.0625f, 0.125f, 0.25f, 0.50f, 0.25f, 0.125f, 0.0625f},
+        {0.000003814697265625f, 0.00000762939453125f, 0.0000152587890625f, 0.000030517578125f, 0.00006103515625f, 0.0001220703125f, 0.000244140625f, 0.00048828125f, 0.0009765625f, 0.001953125f, 0.00390625f, 0.0078125f, 0.015625f, 0.03125f, 0.0625f, 0.125f, 0.25f, 0.50f, 0.25f, 0.125f},
+        {0.0000019073486328125f, 0.000003814697265625f, 0.00000762939453125f, 0.0000152587890625f, 0.000030517578125f, 0.00006103515625f, 0.0001220703125f, 0.000244140625f, 0.00048828125f, 0.0009765625f, 0.001953125f, 0.00390625f, 0.0078125f, 0.015625f, 0.03125f, 0.0625f, 0.125f, 0.25f, 0.50f, 0.25f},
+        {0.00000095367431640625f, 0.0000019073486328125f, 0.000003814697265625f, 0.00000762939453125f, 0.0000152587890625f, 0.000030517578125f, 0.00006103515625f, 0.0001220703125f, 0.000244140625f, 0.00048828125f, 0.0009765625f, 0.001953125f, 0.00390625f, 0.0078125f, 0.015625f, 0.03125f, 0.0625f, 0.125f, 0.25f, 0.50f}
     };
 
     // Waveshaping function
@@ -257,7 +281,7 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     };
 
     // Prime-based waveshaping amounts
-    const float primes[NUM_DELAY_LINES] = {2.0f, 3.0f, 5.0f, 7.0f};
+    const float primes[MAX_DELAY_LINES] = {2.0f, 3.0f, 5.0f, 7.0f, 11.0f, 13.0f, 17.0f, 19.0f, 23.0f, 29.0f, 31.0f, 37.0f, 41.0f, 43.0f, 47.0f, 53.0f, 59.0f, 61.0f, 67.0f, 71.0f};
     const float baseWaveshapeAmount = 5.0f;
 
     // DC blocking filter
@@ -278,11 +302,11 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
         lastOutputRight = outputRight;
 
         // Prepare feedback using the matrix
-        float feedbackLeft[NUM_DELAY_LINES] = {0.0f};
-        float feedbackRight[NUM_DELAY_LINES] = {0.0f};
+        float feedbackLeft[MAX_DELAY_LINES] = {0.0f};
+        float feedbackRight[MAX_DELAY_LINES] = {0.0f};
 
-        for (int i = 0; i < NUM_DELAY_LINES; ++i) {
-            for (int j = 0; j < NUM_DELAY_LINES; ++j) {
+        for (int i = 0; i < num_delay_lines; ++i) {
+            for (int j = 0; j < num_delay_lines; ++j) {
                 feedbackLeft[i] += mFeedbackLeft[j] * feedbackMatrix[i][j];
                 feedbackRight[i] += mFeedbackRight[j] * feedbackMatrix[i][j];
             }
@@ -291,7 +315,7 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
         // Write to circular buffer with feedback
         float summedFeedbackLeft = 0.0f;
         float summedFeedbackRight = 0.0f;
-        for (int i = 0; i < NUM_DELAY_LINES; ++i) {
+        for (int i = 0; i < num_delay_lines; ++i) {
             summedFeedbackLeft += feedbackLeft[i];
             summedFeedbackRight += feedbackRight[i];
         }
@@ -316,7 +340,7 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
         float earlyReflectionLeft = 0.0f;
         float earlyReflectionRight = 0.0f;
 
-        for (int i = 0; i < NUM_DELAY_LINES; ++i)
+        for (int i = 0; i < num_delay_lines; ++i)
         {
             // Early reflections setup
              const int numReflections = 8;
@@ -353,7 +377,7 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
                  }
             
             // Define prime numbers for irregular delay multipliers
-            const float delayPrimes[NUM_DELAY_LINES] = {2.0f, 3.0f, 5.0f, 7.0f};
+            const float delayPrimes[MAX_DELAY_LINES] = {2.0f, 3.0f, 5.0f, 7.0f, 11.0f, 13.0f, 17.0f, 19.0f, 23.0f, 29.0f, 31.0f, 37.0f, 41.0f, 43.0f, 47.0f, 53.0f, 59.0f, 61.0f, 67.0f, 71.0f};
 
             // In the class definition, add a new member variable:
             float mIrregularDelayFactor;
@@ -366,7 +390,7 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
             float weight = 1.0f / (i + 1);  // Decreasing weight for each delay line
 
             // Unique LFO phase for each delay line
-            float uniqueLfoPhase_left = mLfoPhase + (float)i / NUM_DELAY_LINES;
+            float uniqueLfoPhase_left = mLfoPhase + (float)i / num_delay_lines;
             float uniqueLfoPhase_right = uniqueLfoPhase_left + lfoPhaseOffset;
             
             // Wrap phases between 0 and 1
@@ -514,7 +538,7 @@ void DelaytutorialAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
 
                 // Scale down the feedback
                 float feedback = *mFeedbackParameter * 0.5f; // Reduce feedback by half
-                for (int i = 0; i < NUM_DELAY_LINES; ++i) {
+                for (int i = 0; i < num_delay_lines; ++i) {
                     mFeedbackLeft[i] = lowPass * feedback;
                     mFeedbackRight[i] = highPass * feedback;
                 }

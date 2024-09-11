@@ -65,6 +65,7 @@ private:
     juce::AudioParameterFloat* mLfoRateParameter;
     juce::AudioParameterFloat* mLfoDepthParameter;
     juce::AudioParameterFloat* mLfoPhaseParameter;
+    juce::AudioParameterInt* mNumDelayLinesParameter;
     
     float mLfoPhase;
     
@@ -81,18 +82,17 @@ private:
     float mDelayReadHead_left;
     float mDelayReadHead_right;
 
-    
-    static const int NUM_DELAY_LINES = 4;  // Number of delay lines
+    static const int MAX_DELAY_LINES = 20;  // Number of delay lines
     float mDelayFraction = 0.66f;  // Each delay line will be this fraction of the previous
     
-    float mDelayTimeInSamples_left[NUM_DELAY_LINES];
-    float mDelayTimeInSamples_right[NUM_DELAY_LINES];
+    float mDelayTimeInSamples_left[MAX_DELAY_LINES];
+    float mDelayTimeInSamples_right[MAX_DELAY_LINES];
+    float mFeedbackLeft[MAX_DELAY_LINES];
+    float mFeedbackRight[MAX_DELAY_LINES];
+    float mFilterStatesLeft[MAX_DELAY_LINES];
+    float mFilterStatesRight[MAX_DELAY_LINES];
+
     
-    float mFeedbackLeft[NUM_DELAY_LINES];
-     float mFeedbackRight[NUM_DELAY_LINES];
-    
-    float mFilterStatesLeft[8] = {0};
-    float mFilterStatesRight[8] = {0};
     
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DelaytutorialAudioProcessor)

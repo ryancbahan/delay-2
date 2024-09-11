@@ -36,7 +36,8 @@ private:
     juce::Slider mLfoRateSlider;
     juce::Slider mLfoDepthSlider;
     juce::Slider mLfoPhaseSlider;
-
+    juce::Slider mDelayLinesSlider;
+    
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DelaytutorialAudioProcessorEditor)
 };
 
